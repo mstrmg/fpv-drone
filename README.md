@@ -14,7 +14,7 @@ npm run test:sim   # headless flight-model checks (hover point, rates, crash, la
 
 | Action | Keyboard | PS5 controller (Mode 2) |
 |---|---|---|
-| Throttle | W / S (stays where you leave it), X = cut | Left stick up/down |
+| Throttle | W / S (stays where you leave it), X = cut | Left stick up (centre = 0%, full up = 100%) |
 | Yaw | A / D | Left stick left/right |
 | Pitch / roll | Arrow keys (hold Shift for full rates) | Right stick |
 | Arm / disarm | Space (throttle must be low) | L1 or L2 |
