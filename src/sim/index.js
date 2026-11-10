@@ -3,11 +3,13 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Quaternion, Vector3 } from 'three';
 import { FlightModel } from './flightModel.js';
+import { Wind } from './environment.js';
 
 export const SIM_HZ = 240;
 export const GRAVITY = 9.81;
 
-const CRASH_SPEED = 7.5;   // m/s change in velocity from one impact that breaks props
+const CRASH_SPEED = 7.5;   // m/s change in velocity from one impact that breaks the frame
+const PROP_STRIKE_SPEED = 4.5; // lower limit while the props are spinning fast
 const BUMP_SPEED = 1.5;    // smaller impacts are reported as 'collision'
 const DRONE_HALF = [0.16, 0.035, 0.16];
 
@@ -76,8 +78,9 @@ export async function createSim({ level, settings = {} }) {
   world.timestep = 1 / SIM_HZ;
   buildStaticWorld(world, level);
 
-  const opts = { cameraTiltDeg: 30, fovDeg: 78, ...settings };
+  const opts = { cameraTiltDeg: 30, fovDeg: 78, wind: true, ...settings };
   const fm = new FlightModel();
+  const wind = new Wind({ seed: level.seed * 13 + 1, meanSpeed: opts.wind ? 3 : 0, gustStrength: opts.wind ? 1.8 : 0 });
 
   const body = world.createRigidBody(
     RAPIER.RigidBodyDesc.dynamic().setCcdEnabled(true).setCanSleep(false),
@@ -106,6 +109,7 @@ export async function createSim({ level, settings = {} }) {
       batteryV: 0, batteryPct: 100, mAhUsed: 0, currentA: 0, flightTimeS: 0, linkQuality: 100, warnings: [],
     },
     link: { signal: 1, jamming: 0, lost: false },
+    env: { wind: wind.value },
     entities: [],
   };
 
@@ -169,7 +173,9 @@ export async function createSim({ level, settings = {} }) {
     const r = body.rotation(), lv = body.linvel(), av = body.angvel();
     const q = [r.x, r.y, r.z, r.w];
     const vel = [lv.x, lv.y, lv.z];
-    fm.step(controls, q, vel, [av.x, av.y, av.z], dt);
+    const agl0 = body.translation().y - level.terrain.heightAt(body.translation().x, body.translation().z);
+    wind.step(dt, agl0);
+    fm.step(controls, q, vel, [av.x, av.y, av.z], dt, wind.value);
 
     body.resetForces(true);
     body.resetTorques(true);
@@ -191,7 +197,13 @@ export async function createSim({ level, settings = {} }) {
     if (impact > BUMP_SPEED) {
       const p = body.translation();
       const position = [p.x, p.y, p.z];
-      if (impact > CRASH_SPEED) crash(position, impact);
+      // Props stick out sideways: an edge-on hit while they spin fast breaks them,
+      // a flat landing on the frame does not.
+      const r2 = body.rotation();
+      const bodyUp = new Vector3(0, 1, 0).applyQuaternion(gq.set(r2.x, r2.y, r2.z, r2.w));
+      const edgeOn = Math.abs(dv.dot(bodyUp)) < 0.7 * impact;
+      const propsFast = fm.armed && Math.max(...fm.motorRpm) > 0.35;
+      if (impact > CRASH_SPEED || (propsFast && edgeOn && impact > PROP_STRIKE_SPEED)) crash(position, impact);
       else {
         const n = dv.clone().normalize();
         emit({ type: 'collision', position, normal: [n.x, n.y, n.z], impactSpeed: impact });

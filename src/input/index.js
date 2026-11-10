@@ -31,7 +31,8 @@ export const DEFAULT_INPUT_SETTINGS = {
   keyStickRate: 5,      // stick units / s
   keyStickMax: 0.75,    // full key press = 75% stick (full-rate flips with Shift)
   keyThrottleRate: 0.6, // throttle units / s while W/S held
-  // 'stick': Mode 2 left stick (centre = 50%); 'r2': R2 trigger is throttle.
+  // 'stick': Mode 2 left stick on a self-centring pad: centre = 0%, full up = 100%,
+  //          below centre stays 0%. 'r2': R2 trigger is throttle.
   padThrottle: 'stick',
 };
 
@@ -111,7 +112,7 @@ export function createInput(target = window, settings = {}) {
       };
       const throttle = s.padThrottle === 'r2'
         ? (pad.buttons[PAD.buttons.r2]?.value ?? 0)
-        : Math.min(1, Math.max(0, (1 - (pad.axes[PAD.axes.ly] ?? 0)) / 2));
+        : Math.min(1, Math.max(0, -dz(pad.axes[PAD.axes.ly] ?? 0)));
       const sticks = { yaw: ax(PAD.axes.lx), roll: ax(PAD.axes.rx), pitch: -ax(PAD.axes.ry) };
       // The pad takes over once a stick moves; keyboard takes over on a key press.
       if (lastPadThrottle !== null && Math.abs(throttle - lastPadThrottle) > 0.02) source = 'gamepad';
