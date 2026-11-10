@@ -101,5 +101,27 @@ const run = (sim, c, secs, each) => { for (let i = 0; i < secs * SIM_HZ; i++) { 
   check('soft landing survives', !crashed && sim.state.hud.altitudeM < 0.2, `alt ${sim.state.hud.altitudeM.toFixed(2)} m`);
 }
 
+// 7. Flying sideways into a wall at moderate speed breaks the props
+{
+  const { sim, c } = await fresh();
+  c.toggleMode = true; sim.step(dt, c); c.toggleMode = false;
+  const gy = level.terrain.heightAt(40, -45);
+  sim._body.setTranslation({ x: 40, y: gy + 4, z: -45 }, true);
+  sim._body.setLinvel({ x: 0, y: 0, z: -6 }, true);
+  c.throttle = globalThis.hoverThrottle; let crashed = null;
+  run(sim, c, 3, () => { for (const e of sim.drainEvents()) if (e.type === 'crash') crashed ??= e; });
+  check('6 m/s into a wall breaks props', !!crashed, crashed ? `impact ${crashed.impactSpeed.toFixed(1)} m/s` : 'survived');
+}
+
+// 8. Prop wash shows up when dropping straight down under power
+{
+  const { sim, c } = await fresh();
+  sim._body.setTranslation({ x: 0, y: 60, z: 0 }, true);
+  sim._body.setLinvel({ x: 0, y: -10, z: 0 }, true);
+  c.throttle = 0.5; let peak = 0;
+  run(sim, c, 0.5, () => { peak = Math.max(peak, sim.flightModel.propWash); });
+  check('prop wash when sinking through downwash', peak > 0.5, `peak ${peak.toFixed(2)}`);
+}
+
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed');
 process.exit(failures ? 1 : 0);

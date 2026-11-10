@@ -23,6 +23,7 @@ export const DEFAULT_AIRFRAME = {
   dragK: [0.02, 0.035, 0.016],     // side, vertical, forward
   rotorDrag: 0.09,                 // N/(m/s) per unit thrust fraction, in-plane "H-force"
   angularDrag: 0.0012,             // N·m/(rad/s)
+  propWashTorque: 0.35,            // N·m peak disturbance when sinking through own wash
 };
 
 // Betaflight "Actual" rates, deg/s.
@@ -50,6 +51,7 @@ export const DEFAULT_BATTERY = {
 };
 
 const DEG = Math.PI / 180;
+const ZERO3 = [0, 0, 0];
 
 export function actualRate(stick, { center, max, expo }) {
   const a = Math.abs(stick);
@@ -92,6 +94,8 @@ export class FlightModel {
     this.forceWorld = new Vector3();
     this.torqueWorld = new Vector3();
     this.rateTarget = new Vector3();
+    this.pwNoise = [0, 0, 0];
+    this.propWash = 0;
   }
 
   get totalMass() { return this.airframe.mass + this.airframe.payloadMass; }
@@ -124,8 +128,9 @@ export class FlightModel {
    * @param {number[]} vel     world linear velocity
    * @param {number[]} angVel  world angular velocity
    * @param {number} dt
+   * @param {number[]} [wind]  world wind velocity (air moves this way)
    */
-  step(controls, q, vel, angVel, dt) {
+  step(controls, q, vel, angVel, dt, wind = ZERO3) {
     const af = this.airframe;
     _q.fromArray(q);
     _qInv.copy(_q).invert();
@@ -211,16 +216,32 @@ export class FlightModel {
       powerSum += Math.pow(this.motorRpm[i], 3);
     }
 
-    // --- Aero in body frame.
-    const vBody = _v.fromArray(vel).applyQuaternion(_qInv);
+    // --- Aero in body frame, using airspeed (velocity relative to the wind).
+    const vBody = _v.set(vel[0] - wind[0], vel[1] - wind[1], vel[2] - wind[2]).applyQuaternion(_qInv);
     const speed = vBody.length();
-    const fx = -af.dragK[0] * speed * vBody.x - af.rotorDrag * (thrustSum / (4 * Tmax)) * 4 * vBody.x;
+    const thrustFrac = thrustSum / (4 * Tmax);
+    const fx = -af.dragK[0] * speed * vBody.x - af.rotorDrag * thrustFrac * 4 * vBody.x;
     const fy = thrustSum - af.dragK[1] * speed * vBody.y;
-    const fz = -af.dragK[2] * speed * vBody.z - af.rotorDrag * (thrustSum / (4 * Tmax)) * 4 * vBody.z;
+    const fz = -af.dragK[2] * speed * vBody.z - af.rotorDrag * thrustFrac * 4 * vBody.z;
+
+    // --- Prop wash: descending into your own downwash makes the quad shake.
+    // Strongest when sinking fast with little forward speed and some thrust.
+    const sink = Math.max(0, -vBody.y - 1.5);
+    const lateral = Math.hypot(vBody.x, vBody.z);
+    const wash = Math.min(1, sink / 6) * Math.max(0, 1 - lateral / 8) * Math.min(1, thrustFrac * 4);
+    this.propWash = wash;
+    const pw = this.pwNoise;
+    const k = Math.min(1, dt * 25);
+    for (let i = 0; i < 3; i++) pw[i] += (Math.random() * 2 - 1 - pw[i]) * k;
+    const pwT = wash * af.propWashTorque;
     this.forceWorld.set(fx, fy, fz).applyQuaternion(_q);
 
     const ad = af.angularDrag;
-    this.torqueWorld.set(txOut - ad * wBody.x, yawReaction - ad * wBody.y, tzOut - ad * wBody.z).applyQuaternion(_q);
+    this.torqueWorld.set(
+      txOut - ad * wBody.x + pwT * pw[0],
+      yawReaction - ad * wBody.y + pwT * 0.3 * pw[1],
+      tzOut - ad * wBody.z + pwT * pw[2],
+    ).applyQuaternion(_q);
 
     // --- Battery.
     const b = this.batt;

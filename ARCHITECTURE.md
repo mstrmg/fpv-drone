@@ -112,6 +112,10 @@ SimState = {
     lost: boolean,            // feed is gone (show full static / no-signal)
   },
 
+  env: {
+    wind: [x,y,z],            // m/s, world-frame air velocity at the drone (sway trees, drift smoke)
+  },
+
   entities: [                 // M2: troops, vehicles, wrecks. Empty in M1.
     {
       id: string,
