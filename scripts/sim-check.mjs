@@ -10,8 +10,8 @@ const check = (name, ok, info) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name
 
 function blank() { return { throttle: 0, yaw: 0, pitch: 0, roll: 0, arm: false, reset: false, toggleMode: false, toggleView: false, pause: false, fire: false }; }
 
-async function fresh() {
-  const sim = await createSim({ level });
+async function fresh(settings = { warhead: 'none' }) {
+  const sim = await createSim({ level, settings });
   const c = blank();
   c.arm = true; sim.step(dt, c); c.arm = false;
   return { sim, c };
@@ -121,6 +121,98 @@ const run = (sim, c, secs, each) => { for (let i = 0; i < secs * SIM_HZ; i++) { 
   c.throttle = 0.5; let peak = 0;
   run(sim, c, 0.5, () => { peak = Math.max(peak, sim.flightModel.propWash); });
   check('prop wash when sinking through downwash', peak > 0.5, `peak ${peak.toFixed(2)}`);
+}
+
+// ---------------- Warhead ----------------
+const collect = (sim, into) => { for (const e of sim.drainEvents()) into.push(e); };
+
+// 9. Payload makes it heavier
+{
+  let lo = 0, hi = 1;
+  for (let k = 0; k < 14; k++) {
+    const mid = (lo + hi) / 2;
+    const { sim, c } = await fresh({ warhead: 'rpg-heat' });
+    sim._body.setTranslation({ x: 0, y: 30, z: 0 }, true);
+    c.throttle = mid; run(sim, c, 0.6);
+    if (sim.state.drone.velocity[1] > 0) hi = mid; else lo = mid;
+  }
+  check('hover with 1.2 kg RPG warhead 40-60%', lo > 0.4 && lo < 0.6, `${(lo * 100).toFixed(1)}%`);
+  globalThis.hoverLoaded = lo;
+}
+
+// 10. Safe near the launch point: fire does nothing, a crash is just a crash
+{
+  const { sim, c } = await fresh({ warhead: 'rpg-heat' });
+  const ev = [];
+  c.throttle = 0.7; run(sim, c, 1.0, () => collect(sim, ev));
+  c.fire = true; sim.step(dt, c); c.fire = false;
+  check('warhead SAFE near launch', sim.state.hud.warhead === 'SAFE' && sim.state.hud.warnings.includes('WARHEAD SAFE') && !ev.some((e) => e.type === 'explosion'),
+    `${sim.state.hud.warhead}, ${sim.state.hud.warheadArmInM} m to arm`);
+}
+
+// 11. Armed after 25 m, contact fuze on the ground, static, then a new drone
+{
+  const { sim, c } = await fresh({ warhead: 'rpg-heat' });
+  const ev = [];
+  sim._body.setTranslation({ x: 0, y: level.terrain.heightAt(0, -60) + 30, z: -60 }, true);
+  c.throttle = globalThis.hoverLoaded; run(sim, c, 0.2, () => collect(sim, ev));
+  const armed = sim.state.hud.warhead;
+  c.throttle = 0; run(sim, c, 4, () => collect(sim, ev));
+  const ex = ev.find((e) => e.type === 'explosion');
+  const lost = ev.find((e) => e.type === 'drone_lost');
+  check('arms after 25 m', armed === 'ARMED', armed);
+  check('impact detonates against ground', ex && ex.surface === 'ground' && ex.chargeKg > 0 && ex.cause === 'impact',
+    ex ? `${ex.surface}, normal ${ex.normal.map((v) => v.toFixed(2))}` : 'no explosion');
+  check('drone_lost + feed lost', !!lost && sim.state.link.lost && sim.state.drone.destroyed, lost ? `respawn in ${lost.respawnIn} s` : 'missing');
+  run(sim, c, 3.2, () => collect(sim, ev));
+  check('next drone after 3 s', ev.some((e) => e.type === 'reset') && !sim.state.link.lost && !sim.state.drone.destroyed && sim.state.hud.warhead === 'SAFE', `${sim.state.hud.warhead}`);
+}
+
+// 12. Hitting a building reports the building
+{
+  const { sim, c } = await fresh({ warhead: 'rpg-heat', wind: false });
+  const ev = [];
+  c.toggleMode = true; sim.step(dt, c); c.toggleMode = false;
+  const gy = level.terrain.heightAt(40, -45);
+  sim._body.setTranslation({ x: 40, y: gy + 6, z: -48 }, true); // past the tree line at z≈-40
+  c.throttle = globalThis.hoverLoaded + 0.1; c.pitch = 0.6; run(sim, c, 6, () => collect(sim, ev));
+  const ex = ev.find((e) => e.type === 'explosion');
+  check('impact on building', ex && ex.surface === 'building' && ex.objectId, ex ? `${ex.surface} ${ex.objectId} normal ${ex.normal.map((v) => v.toFixed(2))}` : 'no explosion');
+}
+
+// 13. Blast falloff, fragments and cover
+{
+  const { sim, c } = await fresh({ warhead: 'frag' });
+  const ev = [];
+  const gy = level.terrain.heightAt(40, -40);
+  sim._body.setTranslation({ x: 40, y: gy + 1, z: -40 }, true);
+  sim.state.drone.warhead.state = 'armed';
+  const got = {};
+  const target = (id, pos) => sim.damage.register({ id, radius: 0.3, position: () => pos, applyDamage: (h) => { got[id] = h; return Math.min(1, h.blast + h.fragments); } });
+  target('d1', [40, gy + 1, -38]);
+  target('d4', [44, gy + 1, -40]);
+  target('d10', [30, gy + 1, -40]);
+  target('d40', [80, gy + 1, -40]);
+  sim.detonate();
+  collect(sim, ev);
+  const tot = (id) => got[id] ? got[id].blast + got[id].fragments : 0;
+  check('damage falls off with distance', tot('d1') > tot('d4') && tot('d4') > tot('d10') && tot('d10') > 0 && !got.d40,
+    ['d1', 'd4', 'd10', 'd40'].map((k) => `${k}=${tot(k).toFixed(2)}`).join(' '));
+  check('hit events emitted', ev.filter((e) => e.type === 'hit').length >= 3, `${ev.filter((e) => e.type === 'hit').length} hits`);
+}
+{
+  // Same distance, one target in the open and one behind the 12 m building at (40, -60).
+  const { sim } = await fresh({ warhead: 'frag' });
+  const gy = level.terrain.heightAt(40, -48);
+  sim._body.setTranslation({ x: 40, y: gy + 1.5, z: -48 }, true);
+  sim.state.drone.warhead.state = 'armed';
+  const got = {};
+  const target = (id, pos) => sim.damage.register({ id, radius: 0.3, position: () => pos, applyDamage: (h) => { got[id] = h; return h.blast + h.fragments; } });
+  target('cover', [40, level.terrain.heightAt(40, -69) + 1, -69]);
+  target('open', [40 + 21, level.terrain.heightAt(61, -48) + 1, -48]);
+  sim.detonate();
+  check('building blocks fragments', got.cover && got.cover.fragments === 0 && !got.cover.lineOfSight, got.cover ? `blast ${got.cover.blast.toFixed(3)} frags ${got.cover.fragments}` : 'not hit');
+  check('open target at same range takes fragments', got.open && got.open.fragments > 0, got.open ? `frags ${got.open.fragments.toFixed(3)}` : 'not hit');
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed');

@@ -64,7 +64,7 @@ export function createDebugVisuals({ canvas, uiRoot, level }) {
     }
   }
 
-  // Drone (visible in chase view)
+  // Drone mesh (hidden: FPV only)
   const drone = new THREE.Group();
   const frame = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.05, 0.32), new THREE.MeshLambertMaterial({ color: 0x222222 }));
   drone.add(frame);
@@ -95,16 +95,23 @@ export function createDebugVisuals({ canvas, uiRoot, level }) {
   const mid = document.createElement('div'); mid.style.cssText = 'position:absolute;left:0;right:0;top:58%;text-align:center;font-size:22px;color:#ffd84a;';
   const help = document.createElement('div');
   help.style.cssText = 'position:absolute;left:50%;top:4%;transform:translateX(-50%);font:12px/1.4 monospace;color:#fff;opacity:.75;text-align:center;';
-  help.textContent = 'W/S throttle · A/D yaw · arrows pitch/roll (Shift = full rate) · Space arm · R reset · M acro/angle · V view · P pause';
+  help.textContent = 'W/S throttle · A/D yaw · arrows pitch/roll (Shift = full rate) · Space arm · R reset · M acro/angle · F detonate · P pause';
   const cross = document.createElement('div');
   cross.style.cssText = 'position:absolute;left:50%;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;border:2px solid rgba(255,255,255,.8);border-radius:50%;';
   osd.append(tl, tr, bl, br, mid, help, cross);
   uiRoot.appendChild(osd);
   setTimeout(() => { help.style.transition = 'opacity 2s'; help.style.opacity = '0'; }, 15000);
 
-  const q = new THREE.Quaternion();
-  const v = new THREE.Vector3();
-  const chaseOffset = new THREE.Vector3();
+  // Explosions: expanding spheres (lethal radius) that fade out.
+  const blasts = [];
+  const blastGeo = new THREE.IcosahedronGeometry(1, 2);
+  // Video static overlay while the link is lost.
+  const noise = document.createElement('canvas');
+  noise.width = 160; noise.height = 90;
+  noise.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated;display:none;';
+  uiRoot.insertBefore(noise, osd); // under the OSD text
+  const nctx = noise.getContext('2d');
+  const nimg = nctx.createImageData(noise.width, noise.height);
 
   function update(state, events, dt) {
     const d = state.drone;
@@ -112,25 +119,10 @@ export function createDebugVisuals({ canvas, uiRoot, level }) {
     drone.quaternion.fromArray(d.quaternion);
     props.forEach((p, i) => { p.material.opacity = 0.2 + d.motors[i] * 0.6; });
 
-    if (state.view === 'chase') {
-      // Behind and above, following yaw only.
-      q.fromArray(d.quaternion);
-      const f = v.set(0, 0, -1).applyQuaternion(q);
-      f.y = 0;
-      if (f.lengthSq() < 1e-4) f.set(0, 0, -1);
-      f.normalize();
-      chaseOffset.copy(f).multiplyScalar(-2.5);
-      chaseOffset.y = 0.9;
-      camera.position.copy(drone.position).add(chaseOffset);
-      camera.lookAt(drone.position.x + f.x * 4, drone.position.y, drone.position.z + f.z * 4);
-      camera.fov = 70;
-      drone.visible = true;
-    } else {
-      camera.position.fromArray(state.camera.position);
-      camera.quaternion.fromArray(state.camera.quaternion);
-      camera.fov = state.camera.fovDeg;
-      drone.visible = false;
-    }
+    camera.position.fromArray(state.camera.position);
+    camera.quaternion.fromArray(state.camera.quaternion);
+    camera.fov = state.camera.fovDeg;
+    drone.visible = false; // FPV only: the camera sits inside the frame
     camera.updateProjectionMatrix();
 
     const seen = new Set();
@@ -151,12 +143,36 @@ export function createDebugVisuals({ canvas, uiRoot, level }) {
     }
     for (const [id, m] of entityMeshes) if (!seen.has(id)) { scene.remove(m); entityMeshes.delete(id); }
 
-    for (const ev of events) if (ev.type === 'crash' || ev.type === 'explosion') flash(ev.type === 'crash' ? '#300' : '#fa0');
+    for (const ev of events) {
+      if (ev.type === 'crash') flash('#300');
+      if (ev.type === 'explosion') {
+        const m = new THREE.Mesh(blastGeo, new THREE.MeshBasicMaterial({ color: 0xffa020, transparent: true, opacity: 0.9 }));
+        m.position.fromArray(ev.position);
+        scene.add(m);
+        blasts.push({ m, age: 0, r: ev.radius });
+      }
+      if (ev.type === 'reset') for (const b of blasts.splice(0)) scene.remove(b.m);
+    }
+    for (let i = blasts.length - 1; i >= 0; i--) {
+      const b = blasts[i];
+      b.age += dt;
+      b.m.scale.setScalar(b.r * Math.min(1, b.age * 6));
+      b.m.material.opacity = Math.max(0, 0.9 - b.age * 0.6);
+      b.m.material.color.setHex(b.age > 0.3 ? 0x333333 : 0xffa020);
+      if (b.age > 1.5) { scene.remove(b.m); blasts.splice(i, 1); }
+    }
+    noise.style.display = state.link.lost ? 'block' : 'none';
+    if (state.link.lost) {
+      const px = nimg.data;
+      for (let i = 0; i < px.length; i += 4) { const g = Math.random() * 255; px[i] = px[i + 1] = px[i + 2] = g; px[i + 3] = 255; }
+      nctx.putImageData(nimg, 0, 0);
+    }
 
     const h = state.hud;
     const t = Math.floor(h.flightTimeS);
     tl.innerHTML = `${h.batteryV.toFixed(1)}V ${h.batteryPct}%<br>${h.currentA.toFixed(1)}A ${h.mAhUsed}mAh`;
-    tr.innerHTML = `LQ ${h.linkQuality}<br>${h.flightMode}`;
+    const wh = h.warhead === 'SAFE' ? `SAFE ${h.warheadArmInM}m` : h.warhead;
+    tr.innerHTML = `LQ ${h.linkQuality}<br>${h.flightMode}<br>WH ${wh}`;
     bl.innerHTML = `THR ${h.throttlePct}%<br>${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
     br.innerHTML = `${h.speedKmh.toFixed(0)} km/h<br>ALT ${h.altitudeM.toFixed(1)}m  HDG ${h.headingDeg.toFixed(0)}`;
     mid.textContent = (state.paused ? 'PAUSED  ' : '') + h.warnings.join('  ');

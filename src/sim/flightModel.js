@@ -100,6 +100,16 @@ export class FlightModel {
 
   get totalMass() { return this.airframe.mass + this.airframe.payloadMass; }
 
+  /** Hang a payload (a rod along the body z axis, ~6 cm under the frame). */
+  setPayload(massKg, lengthM = 0.3) {
+    const af = this.airframe;
+    this.baseInertia ??= [...af.inertia];
+    const [bx, by, bz] = this.baseInertia;
+    const rod = massKg * lengthM * lengthM / 12, drop = massKg * 0.06 * 0.06;
+    af.payloadMass = massKg;
+    af.inertia = [bx + rod + drop, by + rod, bz + drop];
+  }
+
   resetBattery() {
     this.soc = 1;
     this.mAhUsed = 0;
