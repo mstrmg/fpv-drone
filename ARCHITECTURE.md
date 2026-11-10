@@ -80,7 +80,7 @@ Level = {
 SimState = {
   time: number,              // sim seconds since level start
   paused: boolean,
-  view: 'fpv' | 'chase',     // which camera the player asked for; chase is a visuals-side follow cam
+  // There is no chase / third-person view: the game is FPV only.
 
   drone: {
     position: [x,y,z], quaternion: [x,y,z,w],
@@ -89,7 +89,13 @@ SimState = {
     throttle: number,          // stick 0..1
     armed: boolean,
     crashed: boolean,          // props broken, needs reset
+    destroyed: boolean,        // warhead went off; the drone is gone (hide it) until the next 'reset'
     flightMode: 'ACRO' | 'ANGLE',
+    warhead: {
+      type: 'none' | 'rpg-heat' | 'frag',
+      state: 'safe' | 'armed' | 'detonated',   // safe until it is armDistanceM from launch
+      massKg: number,          // carried under the frame; visuals can size the model from this
+    },
   },
 
   camera: { position:[x,y,z], quaternion:[x,y,z,w], fovDeg /* vertical */, tiltDeg },
@@ -103,6 +109,8 @@ SimState = {
     batteryV, batteryPct, mAhUsed, currentA,
     flightTimeS,
     linkQuality,              // 0..100 (M3 makes this drop)
+    warhead: 'NONE' | 'SAFE' | 'ARMED' | 'DETONATED',
+    warheadArmInM: number,    // metres still to fly before the warhead arms (0 once armed)
     warnings: string[],       // e.g. 'CRASH', 'LOW BATTERY', 'THROTTLE', 'DISARMED'
   },
 
@@ -140,10 +148,33 @@ Every event has `{ type, time }` plus:
 | `collision`        | `position, normal, impactSpeed` | the drone bumped something but survived |
 | `crash`            | `position, impactSpeed` | the drone broke |
 | `reset`            | –            | drone respawned; visuals should clear trails, debris, etc. |
-| `explosion`        | `position, radius, kind: 'warhead' \| 'vehicle' \| 'ammo'` | M2 |
-| `hit`              | `entityId, position, damage` | M2 |
+| `explosion`        | see below | something blew up |
+| `drone_lost`       | `reason: 'detonated'`, `respawnIn` (s) | the drone is gone; `link.lost` is true (video feed is static) until the `reset` that follows |
+| `hit`              | `entityId, position, damage, source: 'blast' \| 'fragments'` | a target took damage (no targets yet) |
 | `entity_destroyed` | `entityId, kind, position` | M2 |
 | `link_lost` / `link_restored` | – | M3 |
+
+`explosion` fields:
+
+```js
+{
+  type: 'explosion', time,
+  position: [x,y,z],       // centre of the blast
+  normal: [x,y,z],         // surface normal it went off against ([0,1,0] in the air)
+  surface: 'ground' | 'building' | 'tree' | 'entity' | 'air',
+  objectId: string | null, // Level object id or entity id it hit, if any
+  kind: 'warhead' | 'vehicle' | 'ammo',
+  chargeKg: number,        // TNT equivalent: drives fireball / smoke / crater size (warhead ≈ 0.3–0.7)
+  radius: number,          // lethal blast radius, m
+  fragmentRadius: number,  // how far fragments fly, m (0 for none)
+  shaped: boolean,         // HEAT shaped charge: jet goes along `direction`
+  direction: [x,y,z],      // drone's travel direction at detonation (unit)
+}
+```
+
+Suggested visuals: fireball and dust scaled by `chargeKg`, a scorch / small crater
+when `surface === 'ground'`, a scorch decal on buildings, fragment sparks out to
+`fragmentRadius`.
 
 ## Game loop (`src/main.js`)
 
@@ -156,7 +187,7 @@ Every event has `{ type, time }` plus:
 ```js
 Controls = {
   throttle: 0..1, yaw: -1..1, pitch: -1..1, roll: -1..1, // pitch +1 = stick forward (nose down), roll +1 = right, yaw +1 = right
-  arm, reset, toggleMode, toggleView, pause, fire,          // edge-triggered booleans (true for one poll)
+  arm, reset, toggleMode, pause, fire,                      // edge-triggered booleans (true for one poll); fire = detonate
 }
 ```
 
