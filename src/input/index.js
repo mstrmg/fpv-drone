@@ -14,7 +14,6 @@ export const KEY_BINDINGS = {
   arm: ['Space'],
   reset: ['KeyR'],
   toggleMode: ['KeyM'],
-  toggleView: ['KeyV'],
   pause: ['KeyP', 'Escape'],
   fire: ['KeyF'],
 };
@@ -36,8 +35,8 @@ export const DEFAULT_INPUT_SETTINGS = {
   padThrottle: 'stick',
 };
 
-const EDGE_ACTIONS = ['arm', 'reset', 'toggleMode', 'toggleView', 'pause', 'fire'];
-const PAD_EDGES = { arm: ['l1', 'l2'], reset: ['options', 'triangle'], toggleMode: ['square'], toggleView: ['r3'], pause: ['create'], fire: ['r2', 'cross'] };
+const EDGE_ACTIONS = ['arm', 'reset', 'toggleMode', 'pause', 'fire'];
+const PAD_EDGES = { arm: ['l1', 'l2'], reset: ['options', 'triangle'], toggleMode: ['square'], pause: ['create'], fire: ['r2', 'cross'] };
 
 export function createInput(target = window, settings = {}) {
   const s = { ...DEFAULT_INPUT_SETTINGS, ...settings };

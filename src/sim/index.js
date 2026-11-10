@@ -4,6 +4,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { Quaternion, Vector3 } from 'three';
 import { FlightModel } from './flightModel.js';
 import { Wind } from './environment.js';
+import { WARHEADS, ARM_DISTANCE_M, FUZE_IMPACT_SPEED, JET_REACH_M, blastAt, DamageRegistry } from './warhead.js';
 
 export const SIM_HZ = 240;
 export const GRAVITY = 9.81;
@@ -12,6 +13,7 @@ const CRASH_SPEED = 7.5;   // m/s change in velocity from one impact that breaks
 const PROP_STRIKE_SPEED = 4.5; // lower limit while the props are spinning fast
 const BUMP_SPEED = 1.5;    // smaller impacts are reported as 'collision'
 const DRONE_HALF = [0.16, 0.035, 0.16];
+const RESPAWN_DELAY = 3;   // s of static after the warhead goes off, then the next drone launches
 
 let rapierReady = null;
 export function initPhysics() {
@@ -42,8 +44,10 @@ function buildStaticWorld(world, level) {
       idx[k++] = a; idx[k++] = c; idx[k++] = d;
     }
   }
+  const surfaces = new Map(); // collider handle → { surface, objectId }
   const ground = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-  world.createCollider(RAPIER.ColliderDesc.trimesh(verts, idx).setFriction(0.8), ground);
+  const gc = world.createCollider(RAPIER.ColliderDesc.trimesh(verts, idx).setFriction(0.8), ground);
+  surfaces.set(gc.handle, { surface: 'ground', objectId: null });
 
   for (const o of level.objects) {
     const [x, y, z] = o.position;
@@ -53,17 +57,20 @@ function buildStaticWorld(world, level) {
       const body = world.createRigidBody(
         RAPIER.RigidBodyDesc.fixed().setTranslation(x, y + h / 2, z).setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }),
       );
-      world.createCollider(RAPIER.ColliderDesc.cuboid(w / 2, h / 2, d / 2), body);
+      const c = world.createCollider(RAPIER.ColliderDesc.cuboid(w / 2, h / 2, d / 2), body);
+      surfaces.set(c.handle, { surface: 'building', objectId: o.id });
     } else if (o.kind === 'tree') {
       const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(x, y, z));
       const trunkH = o.height * 0.6;
-      world.createCollider(RAPIER.ColliderDesc.cylinder(trunkH / 2, 0.25).setTranslation(0, trunkH / 2, 0), body);
+      const tag = (c) => surfaces.set(c.handle, { surface: 'tree', objectId: o.id });
+      tag(world.createCollider(RAPIER.ColliderDesc.cylinder(trunkH / 2, 0.25).setTranslation(0, trunkH / 2, 0), body));
       // Canopy: an ellipsoid-ish stack of two balls.
       const r = o.radius;
-      world.createCollider(RAPIER.ColliderDesc.ball(r).setTranslation(0, o.height - r, 0), body);
-      world.createCollider(RAPIER.ColliderDesc.ball(r * 0.8).setTranslation(0, o.height - r * 1.8, 0), body);
+      tag(world.createCollider(RAPIER.ColliderDesc.ball(r).setTranslation(0, o.height - r, 0), body));
+      tag(world.createCollider(RAPIER.ColliderDesc.ball(r * 0.8).setTranslation(0, o.height - r * 1.8, 0), body));
     }
   }
+  return surfaces;
 }
 
 const _q = new Quaternion();
@@ -76,10 +83,13 @@ export async function createSim({ level, settings = {} }) {
   await initPhysics();
   const world = new RAPIER.World({ x: 0, y: -GRAVITY, z: 0 });
   world.timestep = 1 / SIM_HZ;
-  buildStaticWorld(world, level);
+  const surfaces = buildStaticWorld(world, level);
 
-  const opts = { cameraTiltDeg: 30, fovDeg: 78, wind: true, ...settings };
+  const opts = { cameraTiltDeg: 30, fovDeg: 78, wind: true, warhead: 'rpg-heat', ...settings };
   const fm = new FlightModel();
+  const warhead = WARHEADS[opts.warhead] ?? WARHEADS.none;
+  fm.setPayload(warhead.massKg, warhead.lengthM);
+  const damage = new DamageRegistry();
   const wind = new Wind({ seed: level.seed * 13 + 1, meanSpeed: opts.wind ? 3 : 0, gustStrength: opts.wind ? 1.8 : 0 });
 
   const body = world.createRigidBody(
@@ -98,15 +108,16 @@ export async function createSim({ level, settings = {} }) {
   const state = {
     time: 0,
     paused: false,
-    view: 'fpv',
     drone: {
       position: [0, 0, 0], quaternion: [0, 0, 0, 1], velocity: [0, 0, 0], angularVelocity: [0, 0, 0],
-      motors: [0, 0, 0, 0], throttle: 0, armed: false, crashed: false, flightMode: 'ACRO',
+      motors: [0, 0, 0, 0], throttle: 0, armed: false, crashed: false, destroyed: false, flightMode: 'ACRO',
+      warhead: { type: warhead.type, state: 'safe', massKg: warhead.massKg },
     },
     camera: { position: [0, 0, 0], quaternion: [0, 0, 0, 1], fovDeg: opts.fovDeg, tiltDeg: opts.cameraTiltDeg },
     hud: {
       armed: false, flightMode: 'ACRO', throttlePct: 0, altitudeM: 0, speedKmh: 0, headingDeg: 0,
-      batteryV: 0, batteryPct: 100, mAhUsed: 0, currentA: 0, flightTimeS: 0, linkQuality: 100, warnings: [],
+      batteryV: 0, batteryPct: 100, mAhUsed: 0, currentA: 0, flightTimeS: 0, linkQuality: 100,
+      warhead: 'SAFE', warheadArmInM: ARM_DISTANCE_M, warnings: [],
     },
     link: { signal: 1, jamming: 0, lost: false },
     env: { wind: wind.value },
@@ -116,6 +127,9 @@ export async function createSim({ level, settings = {} }) {
   let flightTime = 0;
   let throttleWarnUntil = -1;
   let upsideDownTime = 0;
+  let safeWarnUntil = -1;
+  let respawnAt = -1;
+  const launchPoint = new Vector3();
   const emit = (e) => events.push({ time: state.time, ...e });
 
   function respawn() {
@@ -127,9 +141,15 @@ export async function createSim({ level, settings = {} }) {
     body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     body.resetForces(true);
     body.resetTorques(true);
+    body.setEnabled(true);
     fm.reset();
     fm.resetBattery();
     state.drone.crashed = false;
+    state.drone.destroyed = false;
+    state.drone.warhead.state = 'safe';
+    state.link.lost = false;
+    respawnAt = -1;
+    launchPoint.set(position[0], position[1], position[2]);
     flightTime = 0;
     upsideDownTime = 0;
     writeState();
@@ -149,14 +169,117 @@ export async function createSim({ level, settings = {} }) {
     emit({ type: 'crash', position, impactSpeed });
   }
 
+  // --- Warhead -------------------------------------------------------------
+
+  const _dir = new Vector3();
+  const _to = new Vector3();
+
+  // What is the drone touching / about to touch? Ray along `dir` from the drone.
+  function probeSurface(origin, dir, maxDist) {
+    const ray = new RAPIER.Ray(origin, dir);
+    const hit = world.castRayAndGetNormal(ray, maxDist, true, undefined, undefined, undefined, body);
+    if (!hit) return null;
+    const info = surfaces.get(hit.collider.handle) ?? entitySurface(hit.collider);
+    return { ...info, normal: [hit.normal.x, hit.normal.y, hit.normal.z], toi: hit.timeOfImpact ?? hit.toi };
+  }
+  // Entities (M2 targets) register colliders here later.
+  const entityColliders = new Map();
+  function entitySurface(collider) {
+    const id = entityColliders.get(collider.handle);
+    return id ? { surface: 'entity', objectId: id } : { surface: 'ground', objectId: null };
+  }
+
+  function lineOfSight(from, to, ignoreBodyHandle) {
+    _to.set(to[0] - from[0], to[1] - from[1], to[2] - from[2]);
+    const dist = _to.length();
+    if (dist < 1e-3) return true;
+    _to.divideScalar(dist);
+    const ray = new RAPIER.Ray({ x: from[0], y: from[1], z: from[2] }, _to);
+    const hit = world.castRay(ray, dist, true, undefined, undefined, undefined, body,
+      ignoreBodyHandle != null ? (c) => c.parent()?.handle !== ignoreBodyHandle : undefined);
+    return !hit || (hit.timeOfImpact ?? hit.toi) >= dist - 0.3;
+  }
+
+  function detonate(cause, impactNormal) {
+    if (state.drone.destroyed || warhead.type === 'none') return;
+    const p = body.translation();
+    const lv = body.linvel();
+    const pos = [p.x, p.y, p.z];
+    const speed = Math.hypot(lv.x, lv.y, lv.z);
+    if (speed > 0.5) _dir.set(lv.x / speed, lv.y / speed, lv.z / speed);
+    else _dir.set(0, 0, -1).applyQuaternion(_q.copy(body.rotation()));
+
+    // Classify what it went off against.
+    let hit = probeSurface(p, _dir, 1.0);
+    if (!hit && cause === 'impact' && impactNormal) hit = probeSurface(p, { x: -impactNormal[0], y: -impactNormal[1], z: -impactNormal[2] }, 1.0);
+    if (!hit && p.y - level.terrain.heightAt(p.x, p.z) < 0.6) hit = { surface: 'ground', objectId: null, normal: [0, 1, 0] };
+    const surface = hit?.surface ?? 'air';
+    const normal = hit?.normal ?? impactNormal ?? [0, 1, 0];
+
+    state.drone.destroyed = true;
+    state.drone.warhead.state = 'detonated';
+    setArmed(false);
+    body.setLinvel({ x: 0, y: 0, z: 0 }, false);
+    body.setAngvel({ x: 0, y: 0, z: 0 }, false);
+    body.setEnabled(false);
+
+    emit({
+      type: 'explosion', position: pos, normal, surface, objectId: hit?.objectId ?? null,
+      kind: 'warhead', chargeKg: warhead.chargeKg, radius: warhead.radius, fragmentRadius: warhead.fragmentRadius,
+      shaped: warhead.shaped, direction: [_dir.x, _dir.y, _dir.z], cause,
+    });
+    applyBlast(pos, [_dir.x, _dir.y, _dir.z], warhead);
+
+    state.link.lost = true;
+    respawnAt = state.time + RESPAWN_DELAY;
+    emit({ type: 'drone_lost', reason: 'detonated', respawnIn: RESPAWN_DELAY });
+  }
+
+  function applyBlast(origin, direction, w) {
+    for (const t of damage.targets.values()) {
+      const tp = t.position();
+      const dx = tp[0] - origin[0], dy = tp[1] - origin[1], dz = tp[2] - origin[2];
+      const centre = Math.hypot(dx, dy, dz);
+      const distance = Math.max(0, centre - (t.radius ?? 0.5));
+      if (distance > Math.max(w.fragmentRadius, w.radius * 6)) continue;
+      const los = lineOfSight(origin, tp, t.bodyHandle);
+      let { blast, fragments } = blastAt(distance, w);
+      if (!los) { blast *= 0.4; fragments = 0; } // blast wraps around cover, fragments don't
+      // HEAT jet: only a target right in front of the nose.
+      const along = centre > 0 ? (dx * direction[0] + dy * direction[1] + dz * direction[2]) / centre : 1;
+      const jet = w.shaped && distance <= JET_REACH_M && along > 0.7;
+      if (blast <= 0 && fragments <= 0 && !jet) continue;
+      const dealt = t.applyDamage({
+        blast, fragments, jet, distance, lineOfSight: los,
+        penetrationMm: jet ? w.penetrationMm : 0, direction, position: origin,
+      }) ?? 0;
+      if (dealt > 0) {
+        if (blast > 0 || jet) emit({ type: 'hit', entityId: t.id, position: tp, damage: dealt, source: 'blast' });
+        else emit({ type: 'hit', entityId: t.id, position: tp, damage: dealt, source: 'fragments' });
+      }
+    }
+  }
+
+  function updateWarheadArming() {
+    const wh = state.drone.warhead;
+    if (warhead.type === 'none') { wh.state = 'safe'; return; }
+    if (wh.state !== 'safe') return;
+    const p = body.translation();
+    const flown = launchPoint.distanceTo(_to.set(p.x, p.y, p.z));
+    if (fm.armed && flown >= ARM_DISTANCE_M) wh.state = 'armed';
+  }
+
   function handleEdges(c) {
     if (c.pause) state.paused = !state.paused;
-    if (c.toggleView) state.view = state.view === 'fpv' ? 'chase' : 'fpv';
+    if (c.fire && !state.paused) {
+      if (state.drone.warhead.state === 'armed') detonate('manual');
+      else if (!state.drone.destroyed && warhead.type !== 'none') safeWarnUntil = state.time + 2;
+    }
     if (c.toggleMode) fm.mode = fm.mode === 'ACRO' ? 'ANGLE' : 'ACRO';
     if (c.reset) { respawn(); emit({ type: 'reset' }); }
     if (c.arm) {
       if (fm.armed) setArmed(false);
-      else if (state.drone.crashed) { /* need reset first */ }
+      else if (state.drone.crashed || state.drone.destroyed) { /* need reset first */ }
       else if (c.throttle > 0.05) throttleWarnUntil = state.time + 2;
       else setArmed(true);
     }
@@ -169,6 +292,13 @@ export async function createSim({ level, settings = {} }) {
   function step(dt, controls) {
     handleEdges(controls);
     if (state.paused) return;
+
+    if (state.drone.destroyed) {
+      state.time += dt;
+      if (respawnAt >= 0 && state.time >= respawnAt) { respawn(); emit({ type: 'reset' }); }
+      writeState(controls);
+      return;
+    }
 
     const r = body.rotation(), lv = body.linvel(), av = body.angvel();
     const q = [r.x, r.y, r.z, r.w];
@@ -203,9 +333,15 @@ export async function createSim({ level, settings = {} }) {
       const bodyUp = new Vector3(0, 1, 0).applyQuaternion(gq.set(r2.x, r2.y, r2.z, r2.w));
       const edgeOn = Math.abs(dv.dot(bodyUp)) < 0.7 * impact;
       const propsFast = fm.armed && Math.max(...fm.motorRpm) > 0.35;
+      const n = dv.clone().normalize();
+      if (state.drone.warhead.state === 'armed' && impact > FUZE_IMPACT_SPEED) {
+        // Contact fuze. The pre-impact velocity is the travel direction.
+        detonate('impact', [n.x, n.y, n.z]);
+        writeState(controls);
+        return;
+      }
       if (impact > CRASH_SPEED || (propsFast && edgeOn && impact > PROP_STRIKE_SPEED)) crash(position, impact);
       else {
-        const n = dv.clone().normalize();
         emit({ type: 'collision', position, normal: [n.x, n.y, n.z], impactSpeed: impact });
       }
     }
@@ -224,6 +360,7 @@ export async function createSim({ level, settings = {} }) {
     const half = level.terrain.size / 2;
     if (Math.abs(p.x) > half || Math.abs(p.z) > half || p.y < -200) crash([p.x, p.y, p.z], 0);
 
+    updateWarheadArming();
     writeState(controls);
   }
 
@@ -264,11 +401,17 @@ export async function createSim({ level, settings = {} }) {
     h.mAhUsed = Math.round(fm.mAhUsed);
     h.currentA = fm.current;
     h.flightTimeS = flightTime;
-    h.linkQuality = Math.round(state.link.signal * 100);
+    h.linkQuality = state.link.lost ? 0 : Math.round(state.link.signal * 100);
+    const ws = d.warhead.state;
+    h.warhead = warhead.type === 'none' ? 'NONE' : ws.toUpperCase();
+    h.warheadArmInM = ws === 'safe' && warhead.type !== 'none'
+      ? Math.max(0, Math.ceil(ARM_DISTANCE_M - launchPoint.distanceTo(_to.set(p.x, p.y, p.z)))) : 0;
     const w = h.warnings;
     w.length = 0;
-    if (d.crashed) w.push('CRASH');
+    if (d.destroyed) w.push('NO SIGNAL');
+    else if (d.crashed) w.push('CRASH');
     else if (!fm.armed) w.push('DISARMED');
+    if (state.time < safeWarnUntil) w.push('WARHEAD SAFE');
     if (state.time < throttleWarnUntil) w.push('THROTTLE');
     if (fm.voltage / fm.batt.cells < 3.3 && fm.armed) w.push('LOW BATTERY');
   }
@@ -280,7 +423,10 @@ export async function createSim({ level, settings = {} }) {
     level,
     flightModel: fm,
     settings: opts,
+    warhead,
+    damage,         // DamageRegistry: register targets that blasts can hurt
     step,
+    detonate: () => detonate('manual'),
     drainEvents() {
       if (!events.length) return EMPTY;
       const out = events.slice();
