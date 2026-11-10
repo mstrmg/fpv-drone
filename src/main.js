@@ -1,0 +1,42 @@
+// Boot + game loop. Shared file: see ARCHITECTURE.md › Game loop.
+import { createTestLevel } from './sim/level.js';
+import { createSim, SIM_HZ } from './sim/index.js';
+import { createInput } from './input/index.js';
+import { createVisuals as createRealVisuals } from './visuals/index.js';
+import { createDebugVisuals } from './debug/debugVisuals.js';
+
+const canvas = document.getElementById('game');
+const uiRoot = document.getElementById('ui');
+
+const level = createTestLevel();
+const sim = await createSim({ level });
+const input = createInput(window);
+// ?debug forces the placeholder renderer.
+const useDebug = new URLSearchParams(location.search).has('debug');
+const visuals = (useDebug ? createDebugVisuals : createRealVisuals)({ canvas, uiRoot, level });
+
+function resize() { visuals.resize(window.innerWidth, window.innerHeight); }
+window.addEventListener('resize', resize);
+resize();
+
+const STEP = 1 / SIM_HZ;
+let acc = 0;
+let last = performance.now();
+
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  const controls = input.poll(dt);
+  acc += dt;
+  while (acc >= STEP) {
+    sim.step(STEP, controls);
+    input.consumeEdges(); // edge-triggered actions apply once, not once per sub-step
+    acc -= STEP;
+  }
+  visuals.update(sim.state, sim.drainEvents(), dt);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// Handy in the console while tuning.
+window.__fpv = { sim, input, level };
