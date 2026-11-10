@@ -50,8 +50,11 @@ export function makeDetailTexture(size = 512) {
   return t;
 }
 
+export const LEAF_RUST = [[132, 100, 54], [108, 76, 44], [100, 90, 54], [142, 114, 66], [88, 66, 42]];
+export const LEAF_YELLOW = [[150, 128, 62], [134, 112, 54], [120, 108, 60], [156, 134, 74], [108, 88, 48]];
+
 // A spray of twigs growing from the bottom centre; `leaves` 0..1 adds the last autumn foliage.
-export function makeTwigTexture(seed, leaves) {
+export function makeTwigTexture(seed, leaves, palette = LEAF_RUST) {
   const S = 512;
   const [c, g] = canvas(S, S);
   const rand = mulberry32(seed);
@@ -79,20 +82,28 @@ export function makeTwigTexture(seed, leaves) {
   };
   for (let k = 0; k < 3; k++) branch(S / 2 + (k - 1) * 14, S + 4, -Math.PI / 2 + (k - 1) * 0.55, S * 0.3, 9, 6);
   // Leaves: muted ochre, rust and tired olive.
-  const palette = [[132, 100, 54], [108, 76, 44], [100, 90, 54], [142, 114, 66], [88, 66, 42]];
   const count = Math.floor(leafSpots.length * leaves * 3.2);
   for (let i = 0; i < count; i++) {
     const [lx, ly] = leafSpots[Math.floor(rand() * leafSpots.length)];
     const p = palette[Math.floor(rand() * palette.length)];
     const k = 0.75 + rand() * 0.45;
     g.fillStyle = `rgb(${p[0] * k | 0},${p[1] * k | 0},${p[2] * k | 0})`;
-    const r = 3 + rand() * 4.5;
+    const r = 2.4 + rand() * 3.2;
     const ex = lx + (rand() - 0.5) * 34, ey = ly + (rand() - 0.5) * 34;
     // Keep foliage inside a rounded outline so the card's square edge never shows.
     if (((ex - S / 2) / (S * 0.44)) ** 2 + ((ey - S * 0.46) / (S * 0.42)) ** 2 > 0.75 + rand() * 0.25) continue;
+    // A pointed leaf with a darker midrib.
+    const len = r * 2.6, wid = r * 1.1, rot = rand() * Math.PI * 2;
+    g.save();
+    g.translate(ex, ey); g.rotate(rot);
     g.beginPath();
-    g.ellipse(ex, ey, r, r * 0.6, rand() * Math.PI, 0, Math.PI * 2);
+    g.moveTo(-len / 2, 0);
+    g.quadraticCurveTo(0, -wid, len / 2, 0);
+    g.quadraticCurveTo(0, wid, -len / 2, 0);
     g.fill();
+    g.strokeStyle = 'rgba(40,28,14,0.45)'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(-len / 2, 0); g.lineTo(len / 2, 0); g.stroke();
+    g.restore();
   }
   const t = canvasTexture(c);
   return t;
@@ -307,4 +318,72 @@ export function makePropBlurTexture() {
   gr.addColorStop(1, 'rgba(40,40,40,0)');
   g.fillStyle = gr; g.fillRect(0, 0, S, S);
   return canvasTexture(c);
+}
+
+// Height-to-normal conversion for canvas textures (tileable).
+function normalFromCanvas(c, strength) {
+  const w = c.width, h = c.height;
+  const src = c.getContext('2d').getImageData(0, 0, w, h).data;
+  const lum = (x, y) => src[((((y % h) + h) % h) * w + (((x % w) + w) % w)) * 4 + 1] / 255;
+  const out = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const dx = (lum(x + 1, y) - lum(x - 1, y)) * strength, dy = (lum(x, y + 1) - lum(x, y - 1)) * strength;
+    const l = Math.hypot(dx, dy, 1), i = (y * w + x) * 4;
+    out[i] = (-dx / l * 0.5 + 0.5) * 255; out[i + 1] = (dy / l * 0.5 + 0.5) * 255; out[i + 2] = (1 / l * 0.5 + 0.5) * 255; out[i + 3] = 255;
+  }
+  const t = new THREE.DataTexture(out, w, h, THREE.RGBAFormat);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.minFilter = THREE.LinearMipmapLinearFilter; t.magFilter = THREE.LinearFilter;
+  t.generateMipmaps = true; t.flipY = true; t.needsUpdate = true;
+  return t;
+}
+
+// Bark: deep vertical furrows for most trees, white paper with dark scars for birch.
+export function makeBarkTextures(kind) {
+  const W = 256, H = 512;
+  const [c, g] = canvas(W, H);
+  const rand = mulberry32(kind === 'birch' ? 71 : 72);
+  if (kind === 'birch') {
+    g.fillStyle = '#d6d2c6'; g.fillRect(0, 0, W, H);
+    speckle(g, W, H, rand, 2500, 120, 0.12);
+    for (let i = 0; i < 90; i++) { // lenticels
+      const y = rand() * H, x = rand() * W, w = 8 + rand() * 40;
+      g.fillStyle = `rgba(40,36,32,${0.3 + rand() * 0.5})`;
+      g.fillRect(x, y, w, 1 + rand() * 2.5);
+      g.fillRect(x - W, y, w, 1 + rand() * 2.5);
+    }
+    for (let i = 0; i < 9; i++) { // dark scars
+      const x = rand() * W, y = rand() * H, r = 10 + rand() * 22;
+      const gr = g.createRadialGradient(x, y, 1, x, y, r);
+      gr.addColorStop(0, 'rgba(22,20,18,0.95)'); gr.addColorStop(0.6, 'rgba(40,36,30,0.7)'); gr.addColorStop(1, 'rgba(40,36,30,0)');
+      g.fillStyle = gr;
+      g.save(); g.translate(x, y); g.scale(1.6, 0.7); g.translate(-x, -y); g.fillRect(x - r, y - r, r * 2, r * 2); g.restore();
+    }
+  } else {
+    g.fillStyle = '#6b6054'; g.fillRect(0, 0, W, H);
+    speckle(g, W, H, rand, 3000, 30, 0.15);
+    g.lineCap = 'round';
+    for (let i = 0; i < 46; i++) { // furrows that wander and wrap horizontally
+      let x = rand() * W, y = -20 + rand() * H;
+      const len = 80 + rand() * 260, w = 2 + rand() * 5;
+      g.strokeStyle = `rgba(22,18,14,${0.5 + rand() * 0.4})`; g.lineWidth = w;
+      for (const off of [-W, 0, W]) {
+        let px = x + off, py = y;
+        const r2 = mulberry32(i * 31 + 5);
+        g.beginPath(); g.moveTo(px, py);
+        for (let k = 0; k < len; k += 14) { px += (r2() - 0.5) * 9; py += 14; g.lineTo(px, py); g.lineTo(px, py - H >= 0 ? py : py); }
+        g.stroke();
+        g.beginPath(); px = x + off; py = y - H; g.moveTo(px, py);
+        const r3 = mulberry32(i * 31 + 5);
+        for (let k = 0; k < len; k += 14) { px += (r3() - 0.5) * 9; py += 14; g.lineTo(px, py); }
+        g.stroke();
+      }
+    }
+    for (let i = 0; i < 900; i++) { // pale ridge flecks and lichen
+      g.fillStyle = rand() < 0.85 ? `rgba(150,140,124,${rand() * 0.22})` : `rgba(120,130,90,${rand() * 0.3})`;
+      g.fillRect(rand() * W, rand() * H, 1 + rand() * 3, 3 + rand() * 12);
+    }
+  }
+  const map = canvasTexture(c, { repeat: true });
+  return { map, normalMap: normalFromCanvas(c, kind === 'birch' ? 2.5 : 5) };
 }

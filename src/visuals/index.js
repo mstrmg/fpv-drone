@@ -152,7 +152,7 @@ export function createVisuals({ canvas, uiRoot, level }) {
     }
 
     env.update(camera.position, time);
-    trees.update(time);
+    trees.update(time, camera.position, dt);
     grass.update(camera.position, time, height);
     const drawH = renderer.domElement.height;
     particles.update(state.paused ? 0 : dt, drawH / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)));
