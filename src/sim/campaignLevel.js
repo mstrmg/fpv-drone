@@ -14,6 +14,7 @@
 // `linkRangeM` and the fortification props (trenches, dugouts, masts).
 
 import { builder } from './demoLevels.js';
+import { dugoutRampRect } from './propColliders.js';
 
 const SIZE = 3072;
 const PLAYER = { x: 40, z: 700 }; // centre of the player's dugout
@@ -72,6 +73,7 @@ export function createCampaignLevel() {
   function dugout(x, z, yaw = 0, opts = {}) {
     const d = { x, y: H(x, z), z, yaw, w: 3.2, d: 3.6, h: 1.95, net: true, collapsed: false, ...opts };
     props.dugouts.push(d);
+    if (d.collapsed) m.crater(x + R(-1, 1), z + R(-1, 1), R(2.2, 3.2), false); // the hit that caved it in
     return d;
   }
   function mast(x, z, height = 7.5) { props.masts.push({ x, y: H(x, z), z, height }); }
@@ -104,12 +106,22 @@ export function createCampaignLevel() {
     [[-1536, -950], [-200, -940], [600, -960], [1536, -950]],                  // enemy supply road
     [[500, -1536], [520, -960], [500, -820], [470, -560], [420, -200]],        // road through the village to the front
     [[-600, -1050], [-560, -950]],                                             // depot spur
+    [[-480, 1536], [-470, 1100], [-500, 700], [-460, 300], [-490, -100], [-470, -520], [-520, -1000], [-480, -1536]], // old N-S field road through the line
+    [[780, 1536], [790, 1000], [760, 560], [800, 150], [770, -200], [740, -420]],
+    [[-1536, 300], [-900, 290], [-300, 312], [300, 295], [900, 305], [1536, 300]],  // grey-zone track, cratered
+    [[-1536, -320], [-700, -330], [0, -312], [600, -325], [1100, -320], [1536, -310]], // enemy lateral road behind the first line
+    [[-1536, -700], [-800, -690], [0, -710], [470, -760]],                        // to the village
+    [[500, -820], [200, -900], [-200, -1000], [-560, -1040]],                     // village to depot
+    [[520, -960], [700, -1200], [900, -1536]],
+    [[-1200, 1300], [-900, 1050], [-650, 800], [-480, 600]],                      // our track to the left flank
+    [[300, 1536], [260, 1200], [320, 880], [260, 640]],                           // aid post track
   );
   // propLayout-style lanes are 2-point segments; split the polylines.
   props.lanes = props.lanes.flatMap((pl) => pl.slice(1).map((p, i) => [pl[i], p]));
   m.poles([-1536, 1000], [1536, 1005], 40, 9);
   m.poles([-1536, -950], [1536, -950], 40, 22);
   m.poles([500, -1536], [520, -960], 40, -1);
+  m.poles([-1536, -320], [1536, -315], 42, 31);
 
   // ---- Tree lines ----------------------------------------------------------------------------
 
@@ -127,7 +139,10 @@ export function createCampaignLevel() {
   // ---- Our side ------------------------------------------------------------------------------
 
   // The player's dugout: front faces north. Mast to the east, launch spot behind the entrance.
-  const home = dugout(PLAYER.x, PLAYER.z, 0, { player: true });
+  // Dug 2.2 m into the ground; the ramp down to its door is a hole in the terrain.
+  const home = dugout(PLAYER.x, PLAYER.z, 0, { player: true, depth: 2.2 });
+  const [rx0, rz0, rx1, rz1] = dugoutRampRect(home); // yaw 0: local axes = world axes
+  const terrainHoles = [[home.x + rx0, home.z + rz0, home.x + rx1, home.z + rz1]];
   const mastPos = [PLAYER.x + 5.2, PLAYER.z + 2.4];
   mast(...mastPos, 8);
   const launch = [PLAYER.x - 1.2, PLAYER.z + 6.8];
@@ -198,7 +213,12 @@ export function createCampaignLevel() {
   m.enemy('infantry', 'rifleman', 450, -142, { patrol: [[450, -142], [470, -300], [450, -142]], idleTime: 8 });
   m.enemy('apc', 'bmp', -60, -152, { yaw: Math.PI });          // dug in behind the trench
   m.enemy('tank', 't72', 300, -158, { yaw: Math.PI * 1.05 });  // hiding in the tree line
-  m.enemy('apc', 'mtlb', 650, -200, { yaw: Math.PI / 2 });
+  m.enemy('apc', 'mtlb', 650, -200, { yaw: Math.PI / 2, riders: ['rifleman', 'rifleman'] });
+  // Behind the first line: quads and pickups running ammo along the lateral road, troops on top.
+  m.enemy('light', 'atv', -700, -318, { patrol: [[-700, -318], [600, -320], [600, -330], [-700, -326]], yaw: -Math.PI / 2 });
+  m.enemy('light', 'atv', 450, -480, { patrol: [[450, -480], [455, -170], [450, -480]], yaw: 0 });
+  m.enemy('light', 'pickup', 300, -322, { patrol: [[300, -322], [-900, -328], [-900, -336], [300, -330]], yaw: Math.PI / 2, riders: ['rifleman', 'mg', 'rifleman'] });
+  m.enemy('light', 'technical', -300, -330, { yaw: -Math.PI / 2, riders: ['rifleman', 'rifleman'] });
   craterField(-1100, 1000, -200, -100, 40, 1.4, 3.6);
 
   // ---- Enemy second line (z ≈ −540) --------------------------------------------------------
@@ -229,7 +249,9 @@ export function createCampaignLevel() {
   m.enemy('tank', 't90', VX + 60, VZ + 12, { yaw: Math.PI });
   m.enemy('light', 'technical', VX - 4, VZ - 40, { patrol: [[VX - 4, VZ - 40], [VX + 2, VZ + 60]], yaw: Math.PI });
   m.enemy('truck', 'ural', VX + 40, VZ - 30, { yaw: Math.PI / 2 });
-  m.enemy('apc', 'btr', VX - 40, VZ + 30, { yaw: 0.2 });
+  m.enemy('apc', 'btr', VX - 40, VZ + 30, { yaw: 0.2, riders: ['rifleman', 'rifleman', 'rpg', 'rifleman'] });
+  m.enemy('light', 'atv', VX + 5, VZ + 80, { patrol: [[VX + 5, VZ + 80], [VX + 15, VZ - 130], [VX - 280, VZ - 80]], yaw: 0 });
+  m.enemy('light', 'pickup', VX - 30, VZ - 60, { yaw: 1.2, riders: ['rifleman', 'rifleman'] });
   squad(VX + 10, VZ, 0, ['officer', 'rifleman', 'rifleman']);
   squad(VX + 55, VZ + 20, Math.PI, ['crew', 'crew']);
   m.enemy('infantry', 'rifleman', VX - 20, VZ - 20, { patrol: [[VX - 20, VZ - 20], [VX - 20, VZ + 40], [VX + 30, VZ + 40]], idleTime: 5 });
@@ -240,12 +262,15 @@ export function createCampaignLevel() {
   m.enemy('truck', 'kamaz', -1000, -950, { patrol: road, yaw: -Math.PI / 2 });
   m.enemy('truck', 'ural', -1040, -950, { patrol: road, yaw: -Math.PI / 2 });
   m.enemy('light', 'uaz', -1070, -950, { patrol: road, yaw: -Math.PI / 2 });
-  m.enemy('apc', 'btr', 900, -962, { patrol: [[900, -962], [-900, -962], [-900, -950], [900, -950]], yaw: Math.PI / 2 });
+  m.enemy('apc', 'btr', 900, -962, { patrol: [[900, -962], [-900, -962], [-900, -950], [900, -950]], yaw: Math.PI / 2, riders: ['rifleman', 'mg', 'rifleman'] });
+  m.enemy('light', 'uaz', -1100, -950, { patrol: road, yaw: -Math.PI / 2, riders: ['rifleman'] });
+  m.enemy('light', 'atv', -300, -700, { patrol: [[-300, -700], [-1200, -690], [-300, -706]], yaw: -Math.PI / 2 });
   const DX = -600, DZ = -1060;
   m.enemy('truck', 'fuel', DX - 12, DZ, { yaw: 0.1 });
   m.enemy('truck', 'fuel', DX + 2, DZ + 3, { yaw: 0.1 });
   m.enemy('truck', 'kamaz', DX + 18, DZ - 4, { yaw: 0.05 });
-  m.enemy('apc', 'mtlb', DX - 30, DZ - 20, { yaw: 1.4 });
+  m.enemy('apc', 'mtlb', DX - 30, DZ - 20, { yaw: 1.4, riders: ['rifleman', 'rifleman', 'officer'] });
+  m.enemy('light', 'atv', DX + 20, DZ + 40, { yaw: 2.2 });
   squad(DX, DZ + 14, 0, ['rifleman', 'rifleman', 'officer']);
   dugout(DX + 30, DZ + 20, 0.4); dugout(DX - 40, DZ + 25, -0.3);
   for (const [x, z] of [[DX - 5, DZ + 30], [DX + 40, DZ - 20]]) m.sandbags(x, z, 0);
@@ -257,7 +282,8 @@ export function createCampaignLevel() {
   const level = m.finish(launch[0], launch[1], 0);
   level.blurb = 'Campaign';
   // On foot inside the dugout, behind the table, facing the front wall.
-  level.start = { mode: 'foot', position: [PLAYER.x + 0.55, home.y, PLAYER.z + 0.7], yaw: 0.15 };
+  level.start = { mode: 'foot', position: [PLAYER.x + 0.55, home.y - home.depth, PLAYER.z + 0.7], yaw: 0.15 };
+  level.terrainHoles = terrainHoles;
   level.home = home;  // the dugout the player starts in (also in props.dugouts with player: true)
   // The video link is measured from the antenna at the top of the mast, not from the launch spot.
   level.linkOrigin = [mastPos[0], H(...mastPos) + 8, mastPos[1]];

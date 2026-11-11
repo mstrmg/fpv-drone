@@ -2,7 +2,7 @@
 //   tank:  t72 (T-72B3), t80 (T-80BVM), t90 (T-90M)
 //   apc:   btr (BTR-82A), bmp (BMP-2), mtlb (MT-LB)
 //   truck: ural (Ural-4320), kamaz (KamAZ-5350), fuel (Ural fuel tanker)
-//   light: uaz (UAZ-469), pickup, technical (pickup with a heavy machine gun)
+//   light: uaz (UAZ-469), pickup, technical (pickup with a heavy machine gun), atv (quad bike)
 // Each builder returns kits for the sprung hull, the turret and gun, loose parts a wreck can shed,
 // and a list of wheels (road wheels, sprockets, tyres) that the animation spins.
 // Units are metres; forward is -Z, up is +Y, origin is the base centre on the ground.
@@ -714,11 +714,47 @@ function buildTechnical() {
   };
 }
 
+// Quad bike: tubular frame, plastic body with racks front and back, fat knobbly tyres, and the rider
+// sitting astride it (crew spot 'rider': a soldier, not a tanker).
+function buildAtv() {
+  const hull = new Kit(), wheels = [], parts = {};
+  hull.box('dark', 0.35, 0.18, 1.5, 0, 0.42, 0);                                   // frame + engine block
+  hull.box('steel', 0.3, 0.28, 0.35, 0, 0.45, 0.05);
+  // Body: front and rear fender pods and the tank/seat spine.
+  hull.profile('paint', [[-1.0, 0.55], [-0.45, 0.55], [-0.4, 0.78], [-0.6, 0.86], [-0.98, 0.8]], 1.05);
+  hull.profile('paint', [[0.4, 0.55], [1.0, 0.55], [1.02, 0.78], [0.85, 0.84], [0.42, 0.82]], 1.08);
+  hull.profile('paint', [[-0.45, 0.6], [0.45, 0.6], [0.45, 0.8], [-0.2, 0.9], [-0.45, 0.88]], 0.42);
+  hull.box('dark', 0.36, 0.1, 0.7, 0, 0.88, 0.15);                                 // seat
+  // Racks with kit strapped on.
+  for (const [z, y] of [[-0.8, 0.88], [0.78, 0.86]]) {
+    for (const sx of [-1, 1]) hull.rod('steel', V(sx * 0.45, y, z - 0.18), V(sx * 0.45, y, z + 0.18), 0.012, 4);
+    for (const dz of [-0.18, 0, 0.18]) hull.rod('steel', V(-0.45, y, z + dz), V(0.45, y, z + dz), 0.01, 4);
+  }
+  hull.box('canvas', 0.5, 0.22, 0.3, 0.05, 1.0, 0.8, 0, 0.2, 0);                   // bag on the back rack
+  hull.box('dark', 0.25, 0.32, 0.17, -0.25, 1.05, 0.85);                           // jerrycan
+  hull.box('wood', 0.42, 0.16, 0.3, 0, 0.97, -0.8);                                // ammo box on the front rack
+  // Handlebars and headlight.
+  hull.rod('steel', V(0, 0.82, -0.45), V(0, 1.02, -0.4), 0.025, 6);
+  hull.rod('dark', V(-0.38, 1.04, -0.38), V(0.38, 1.04, -0.38), 0.016, 5);
+  hull.box('dark', 0.16, 0.08, 0.1, 0, 0.98, -0.48);
+  hull.cyl('glass', 0.05, 0.05, 0.03, 0, 0.82, -1.0, HALF_PI, 0, 0, 10);
+  hull.box('dark', 0.9, 0.06, 0.06, 0, 0.42, -1.05);                               // bumper
+  zMark(hull, 0.535, 0.7, 0.7, 0.22, HALF_PI);
+  zMark(hull, -0.535, 0.7, 0.7, 0.22, -HALF_PI);
+  tyreWheels(wheels, 0.3, 0.24, 0.5, [-0.68, 0.68], 0.3, 1);
+  return {
+    hull, wheels, parts, size: [1.2, 1.3, 2.1], engine: [0, 0.5, 0.05],
+    exhaust: [[0.2, 0.5, 1.0, 0, 0, 1]], fires: [[0, 0.6, 0.1]],
+    tossOnDeath: [], sink: 0.12,
+    crew: [{ role: 'driver', on: 'hull', pos: [0, 0.93 - 0.86, 0.12], mode: 'rider', variant: 'rifleman' }],
+  };
+}
+
 export const VEHICLE_BUILDERS = {
   tank: { t72: buildT72, t80: buildT80, t90: buildT90 },
   apc: { btr: buildBtr, bmp: buildBmp, mtlb: buildMtlb },
   truck: { ural: buildUral, kamaz: buildKamaz, fuel: buildFuel },
-  light: { uaz: buildUaz, pickup: buildPickup, technical: buildTechnical },
+  light: { uaz: buildUaz, pickup: buildPickup, technical: buildTechnical, atv: buildAtv },
 };
 
 // Wheels. Tyres burn off in a wreck, leaving the steel rim; tracked vehicles have dual road wheels.

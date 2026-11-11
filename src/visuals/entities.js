@@ -762,7 +762,7 @@ export function createEntities({ scene, level, smoke, fire }) {
     let f = v.crewFigs.find((x) => x.spot === spot);
     if (f) return f;
     const parent = spot.on === 'turret' && v.turret ? v.turret : v.inner;
-    const s = soldiers.make('crew', hashString(v.id + spot.role) + 5);
+    const s = soldiers.make(spot.variant ?? 'crew', hashString(v.id + spot.role) + 5);
     initSoldierAnim(s);
     s.root.position.fromArray(spot.pos);
     s.root.scale.setScalar(s.scale);
@@ -790,7 +790,8 @@ export function createEntities({ scene, level, smoke, fire }) {
       f.s.root.position.set(spot.pos[0], spot.pos[1] - (1 - f.k) * 0.95 + (f.mode === 'slumped' ? 0.06 : 0), spot.pos[2]);
       if (f.s.root.visible && dt > 0) {
         const al = alerted.has(e.id) && clock - alerted.get(e.id) < 60;
-        animateCrew(f.s, { dt, mode: f.mode === 'driver' ? 'hatch' : f.mode, alert: al, seated: spot.mode === 'driver' });
+        // A quad bike's rider sits astride it with his hands on the bars.
+        animateCrew(f.s, { dt, mode: f.mode === 'driver' ? 'hatch' : f.mode === 'rider' ? 'gunner' : f.mode, alert: al, seated: spot.mode === 'driver' || spot.mode === 'rider' });
       }
     }
     for (const h of v.hatches) {
@@ -1050,9 +1051,20 @@ export function createEntities({ scene, level, smoke, fire }) {
       }
       return;
     }
+    const al = alerted.has(e.id) && clock - alerted.get(e.id) < 60 ? 1 : 0;
+    if (e.riding) {
+      // Sitting on a vehicle (legs over the side): the sim gives the point he sits on.
+      s.root.quaternion.fromArray(e.quaternion);
+      s.root.position.fromArray(e.position);
+      s.root.position.addScaledVector(tmpV.set(0, 1, 0).applyQuaternion(s.root.quaternion), -0.86 * sc);
+      if (dt > 0) animateCrew(s, { dt, mode: 'gunner', alert: al, seated: true });
+      v.shadow.visible = false;
+      v.wasRiding = true;
+      return;
+    }
+    if (v.wasRiding) { v.wasRiding = false; v.shadow.visible = true; if (s.wpivot) s.wpivot.visible = true; }
     s.root.position.fromArray(e.position);
     s.root.quaternion.fromArray(e.quaternion);
-    const al = alerted.has(e.id) && clock - alerted.get(e.id) < 60 ? 1 : 0;
     if (dt > 0) animateSoldier(s, { dt, speed, status: e.status, drone, alert: al, wounds: e.wounds });
     // A bleeding man leaves a trail of drops.
     if (e.bleeding && dt > 0) {

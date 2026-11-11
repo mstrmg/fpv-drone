@@ -84,8 +84,10 @@ Level = {
     sandbags: [{ x, y, z, yaw, roll, layer }],          // single bags ≈ 0.62 x 0.2 x 0.3 m
     // Optional fortifications (campaign map):
     trenches: [{ points: [[x, y, z], ...], width }],    // zig-zag fire / communication trench centre line; no collider (low spoil banks)
-    dugouts:  [{ x, y, z, yaw, w, d, h, net, collapsed, player? }], // log-and-earth dugout, front wall faces yaw (0 = −Z),
-                                                        // entrance in the rear wall. Solid parts: dugoutBoxes() in src/sim/propColliders.js
+    dugouts:  [{ x, y, z, yaw, w, d, net, collapsed, player?, depth? }], // dug-in dugout: a low earth mound under a net (y = ground).
+                                                        // The player's (player: true) has a room `depth` m below ground, front wall
+                                                        // facing yaw (0 = −Z), and a ramp up from its rear door. Solid parts and
+                                                        // the ramp rect: dugoutBoxes() / dugoutRampRect() in src/sim/propColliders.js
     masts:    [{ x, y, z, height }],                    // telescopic antenna mast (pole collider)
   },
 
@@ -94,7 +96,12 @@ Level = {
   home?: dugout,            // the dugout the player starts in (same object as in props.dugouts, player: true)
   linkOrigin?: [x,y,z],     // the video link is measured from here (mast top) instead of the launch spot
   linkRangeM?: number,      // default 800
+  terrainHoles?: [[x0, z0, x1, z1], ...],  // world rects with no ground (the dugout ramp): the sim leaves them out of the
+                            // ground collider, the visuals discard the terrain there. heightAt() is unchanged.
 }
+
+Level enemy defs may carry `riders: [variant, ...]`: infantry that ride on top of that vehicle (seats per
+variant in RIDER_SEATS, src/sim/entities.js) until it is knocked out or stops while they are alarmed.
 
 Everything in `props` except wires has a static collider (an explosion on one reports `surface: 'prop'`).
 Wires are crashable: flying into a cable while the motors are armed tangles the props and emits
@@ -213,6 +220,8 @@ SimState = {
       mobility: number,         // 0..1 (legs)
       bleeding: boolean,
       fromVehicle?: string,     // id of the vehicle a bailed-out crewman came from (variant 'crew')
+      riding: string | null,    // id of the vehicle he sits on top of (legs over the side); position = the point he sits on,
+                                // quaternion = the way he faces. null once he jumps or falls off
     },
   ],
 }
@@ -225,7 +234,7 @@ SimState = {
 | kind | variants | notes |
 |------|----------|-------|
 | `infantry` | `rifleman`, `mg`, `rpg`, `officer`, `crew` | `mg` carries a belt-fed machine gun, `rpg` a rocket launcher, `officer` has a pistol / binoculars and his shout alerts the squad from further away, `crew` = a bailed-out vehicle crewman (tanker helmet and coveralls; `fromVehicle` set) |
-| `light` | `uaz`, `pickup`, `technical` | UAZ-469-style jeep, pickup truck, pickup with a mounted heavy MG (`technical` tracks the drone with its gun: `turretYaw`) |
+| `light` | `uaz`, `pickup`, `technical`, `atv` | UAZ-469-style jeep, pickup truck, pickup with a mounted heavy MG (`technical` tracks the drone with its gun: `turretYaw`), quad bike with one rider (the `driver` crew seat, always visible) |
 | `truck` | `ural`, `kamaz`, `fuel` | Ural-4320 6x6, KamAZ-5350, fuel tanker (explodes big and fast) |
 | `apc` | `btr`, `bmp`, `mtlb` | BTR-80-style 8x8 (`wheels`, thin armour), BMP-2-style tracked IFV, MT-LB-style light carrier (no turret) |
 | `tank` | `t72`, `t80`, `t90` | T-72 (autoloader, turret often blows off), T-80 (gas turbine, quicker), T-90 (composite + reactive armour, wider hull) |

@@ -109,6 +109,8 @@ function buildLocalMap(level) {
   }
   // Trampled launch spot.
   blob(level.spawn.position[0], level.spawn.position[2], 7, '0,255,0', 0.95);
+  // Trodden mud round the dugouts (no grass growing through the nets).
+  for (const d of level.props?.dugouts ?? []) blob(d.x, d.z, d.player ? 9 : 6, '0,255,0', d.player ? 0.95 : 0.7);
   const tex = canvasTexture(c, { srgb: false, aniso: 4, flipY: false });
   // Blast mark: churned bare earth in the middle, soot and thrown soil around it.
   const scorch = (x, z, radius) => {
@@ -170,10 +172,20 @@ function buildSkirt(terrain) {
 const fragDecl = /* glsl */ `
   uniform sampler2D tFieldColor, tFieldData, tLocal, tDetail;
   varying vec3 vWp;
+  #ifdef HOLES
+  uniform vec4 uHoles[HOLES];
+  #endif
 `;
 
 const fragAlbedo = /* glsl */ `
   vec2 wxz = vWp.xz;
+  #ifdef HOLES
+  // Cut-outs (a dugout's entrance ramp): x0, z0, x1, z1.
+  for (int i = 0; i < HOLES; i++) {
+    vec4 h = uHoles[i];
+    if (wxz.x > h.x && wxz.x < h.z && wxz.y > h.y && wxz.y < h.w) discard;
+  }
+  #endif
   float camDist = length(vWp - cameraPosition);
   vec2 fuv = wxz / ${FIELD_SPAN.toFixed(1)} + 0.5;
   vec3 fcol = texture2D(tFieldColor, fuv).rgb;
@@ -245,6 +257,11 @@ export function createTerrain({ scene, level, detailTex }) {
   };
   const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
   mat.defines = { LOCAL_SIZE: terrain.size.toFixed(1) };
+  const holes = (level.terrainHoles ?? []).slice(0, 8);
+  if (holes.length) {
+    mat.defines.HOLES = holes.length;
+    uniforms.uHoles = { value: holes.map((h) => new THREE.Vector4(...h)) };
+  }
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
     sh.vertexShader = sh.vertexShader

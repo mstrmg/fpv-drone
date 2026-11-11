@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { mulberry32 } from './rng.js';
 import { canvasTexture, makePlankTexture, makeBarkTextures } from './textures.js';
-import { dugoutBoxes, DUGOUT_WALL, DUGOUT_DOOR, DUGOUT_OPEN_REAR } from '../sim/propColliders.js';
+import { DUGOUT_WALL, DUGOUT_DOOR, DUGOUT_MOUND, dugoutRampRect } from '../sim/propColliders.js';
 import { createSoldierFactory } from './soldierModel.js';
 import { initSoldierAnim, animateCrew } from './soldierAnim.js';
 import { createDrone } from './drone.js';
@@ -202,90 +202,163 @@ export function createFortifications({ scene, level }) {
   };
 
   // ---- Earth banks + roof mound per dugout (one merged mesh) ---------------------------------
-  const earthGeos = [], nets = [[], []];
+  const earthGeos = [], nets = [[], []], rampParts = [], rampFloors = [];
   for (const d of dugouts) buildDugout(d);
 
   function buildDugout(d) {
-    const t = DUGOUT_WALL, hw = d.w / 2, hd = d.d / 2;
-    const h = d.collapsed ? d.h * 0.55 : d.h;
-    // Inside faces of the walls: stacked horizontal logs.
-    const rows = Math.max(3, Math.floor(h / (LOG_R * 2)));
+    const hw = d.w / 2, hd = d.d / 2;
+    if (d.player) buildRoom(d);
+    else if (d.collapsed) {
+      // Caved in by a hit: roof logs sticking up out of the churned earth.
+      for (let k = 0; k < 7; k++) log(d, (rand() - 0.5) * d.w, 0.15 + rand() * 0.25, (rand() - 0.5) * d.d, 1.6 + rand() * 1.8, rand() < 0.5, LOG_R, (rand() - 0.5) * 0.9);
+    } else {
+      // Ends of the roof logs show at the edge of the mound.
+      for (let z = -hd; z <= hd; z += LOG_R * 2.2) log(d, 0, 0.12, z, d.w + 1.2, false);
+    }
+    earthGeos.push(earthMound(d));
+    if (d.net) nets[d.collapsed ? 1 : 0].push(netGeo(d));
+  }
+
+  // The player's dugout: a log-lined room dug `depth` m down, a log ceiling at ground level,
+  // and a ramp with plank-revetted sides and log steps up from the rear door.
+  function buildRoom(d) {
+    const hw = d.w / 2, hd = d.d / 2, D = d.depth, y0 = -D;
+    const [g0, g1] = DUGOUT_DOOR;
+    const rows = Math.floor((D - LOG_R * 2) / (LOG_R * 2));
     for (let r = 0; r < rows; r++) {
-      const y = LOG_R + r * LOG_R * 2;
+      const y = y0 + LOG_R + r * LOG_R * 2;
       log(d, 0, y, -hd - LOG_R, d.w + 0.3, false);
       log(d, -hw - LOG_R, y, 0, d.d + 0.3, true);
       log(d, hw + LOG_R, y, 0, d.d + 0.3, true);
-      const [g0, g1] = DUGOUT_DOOR;
       log(d, (-hw - 0.15 + g0) / 2, y, hd + LOG_R, g0 + hw + 0.15, false);
       log(d, (g1 + hw + 0.15) / 2, y, hd + LOG_R, hw + 0.15 - g1, false);
     }
-    // Corner and door posts.
-    for (const [lx, lz] of [[-hw, -hd], [hw, -hd], [-hw, hd], [hw, hd], [DUGOUT_DOOR[0], hd], [DUGOUT_DOOR[1], hd]]) {
-      toWorld(d, lx, h / 2, lz);
-      logs.push(new THREE.Matrix4().compose(p.clone(), q.setFromEuler(e.set(0, 0, Math.PI / 2)).clone(), sc.set(h + 0.1, 0.1, 0.1).clone()));
+    for (const [lx, lz] of [[-hw, -hd], [hw, -hd], [-hw, hd], [hw, hd], [g0, hd], [g1, hd], [-hw, 0], [hw, 0]]) {
+      toWorld(d, lx, y0 + D / 2, lz);
+      logs.push(new THREE.Matrix4().compose(p.clone(), q.setFromEuler(e.set(0, 0, Math.PI / 2)).clone(), sc.set(D, 0.1, 0.1).clone()));
     }
-    // Roof: logs across the room (along X), laid side by side from the front wall back.
-    const z0 = -hd - t * 0.5, z1 = hd - DUGOUT_OPEN_REAR;
-    let i = 0;
-    for (let z = z0; z <= z1; z += LOG_R * 2.1, i++) {
-      const sag = d.collapsed ? -Math.max(0, Math.sin((z - z0) / (z1 - z0) * Math.PI)) * 0.7 : 0;
-      log(d, 0, h + LOG_R + sag * (0.5 + rand()), z, d.w + t * 1.5, false, LOG_R, d.collapsed ? (rand() - 0.5) * 0.5 : 0);
-    }
-    // Lintel over the open rear part (holds the net up) and its two posts.
-    if (!d.collapsed) log(d, 0, h + 0.5, hd + 0.05, d.w + 0.4, false, 0.08);
+    // Ceiling: logs across the room just under the ground, on two beams.
+    for (let z = -hd - 0.1; z <= hd + 0.12; z += LOG_R * 2.05) log(d, 0, -LOG_R, z, d.w + 0.6, false);
+    for (const x of [-0.6, 0.8]) log(d, x, -LOG_R * 2 - 0.08, 0, d.d + 0.3, true, 0.1);
 
-    // Earth: bank round the outside of the walls, and the earth heaped on the roof.
-    const geo = earthMound(d, h);
-    earthGeos.push(geo);
-    if (d.net) nets[d.collapsed ? 1 : 0].push(netGeo(d, h));
+    // Ramp.
+    const [rx0, rz0, rx1, rz1] = dugoutRampRect(d), L = rz1 - rz0;
+    const c = Math.cos(d.yaw), s = Math.sin(d.yaw);
+    const W = (lx, ly, lz) => [d.x + lx * c + lz * s, d.y + ly, d.z - lx * s + lz * c];
+    const quad = (list, a, b, cc, dd) => list.push(...a, ...b, ...cc, ...a, ...cc, ...dd);
+    // The pit itself: mud floor and the earth behind the logs (seen through the gaps).
+    const ex = hw + LOG_R * 2.2, ez = hd + LOG_R * 2.2;
+    quad(rampFloors, W(-ex, y0 + 0.005, -ez), W(-ex, y0 + 0.005, ez), W(ex, y0 + 0.005, ez), W(ex, y0 + 0.005, -ez));
+    quad(rampParts, W(-ex, y0, -ez), W(ex, y0, -ez), W(ex, 0, -ez), W(-ex, 0, -ez));
+    quad(rampParts, W(-ex, y0, ez), W(-ex, y0, -ez), W(-ex, 0, -ez), W(-ex, 0, ez));
+    quad(rampParts, W(ex, y0, -ez), W(ex, y0, ez), W(ex, 0, ez), W(ex, 0, -ez));
+    quad(rampParts, W(-ex, y0, ez), W(g0, y0, ez), W(g0, 0, ez), W(-ex, 0, ez));
+    quad(rampParts, W(g1, y0, ez), W(ex, y0, ez), W(ex, 0, ez), W(g1, 0, ez));
+    const slope = (z) => y0 + (z - rz0) / L * D;
+    // Floor (mud) and the side revetments (planks from the floor up to the ground).
+    quad(rampFloors, W(rx0, y0 + 0.02, rz0), W(rx0, 0.02, rz1), W(rx1, 0.02, rz1), W(rx1, y0 + 0.02, rz0));
+    for (const [x, sgn] of [[rx0, 1], [rx1, -1]]) {
+      const N = 6;
+      for (let k = 0; k < N; k++) {
+        const za = rz0 + (k / N) * L, zb = rz0 + ((k + 1) / N) * L;
+        const a = W(x, slope(za) - 0.05, za), b = W(x, slope(zb) - 0.05, zb), cc = W(x, 0.06, zb), dd = W(x, 0.06, za);
+        if (sgn > 0) quad(rampParts, a, dd, cc, b); else quad(rampParts, a, b, cc, dd);
+      }
+      // Posts holding the planks back.
+      for (let z = rz0 + 0.4; z < rz1; z += 1.0) {
+        toWorld(d, x + sgn * 0.05, (slope(z) + 0.1) / 2, z);
+        logs.push(new THREE.Matrix4().compose(p.clone(), q.setFromEuler(e.set(0, 0, Math.PI / 2)).clone(), sc.set(-slope(z) + 0.15, 0.06, 0.06).clone()));
+      }
+    }
+    // Log steps.
+    for (let z = rz0 + 0.35; z < rz1 - 0.1; z += 0.42) log(d, (rx0 + rx1) / 2, slope(z) + 0.04, z, rx1 - rx0, false, 0.06);
+    // Lintel over the door.
+    log(d, (g0 + g1) / 2, -LOG_R * 3, hd + 0.05, g1 - g0 + 0.6, false, 0.1);
   }
 
-  // A ring-shaped bank from the wall top out to the ground, with a mound over the roofed part.
-  function earthMound(d, h) {
-    const t = DUGOUT_WALL, hw = d.w / 2 + t, hd = d.d / 2 + t;
-    const N = 28; // grid over the whole footprint incl. the bank
-    const W = (hw + BANK) * 2, D = (hd + BANK) * 2;
-    const g = new THREE.PlaneGeometry(W, D, N, N).rotateX(-Math.PI / 2);
+  // Earth heaped over the roof: a low mound sloping out to the ground. Over the player's ramp the
+  // triangles are dropped so the hole stays open.
+  function earthMound(d) {
+    const t = DUGOUT_WALL, hw = d.w / 2 + t, hd = d.d / 2 + t, BANKW = 1.5;
+    const N = 24;
+    const g = new THREE.PlaneGeometry((hw + BANKW) * 2, (hd + BANKW) * 2, N, N).rotateX(-Math.PI / 2);
     const pos = g.attributes.position;
     const col = [];
     const r = mulberry32(Math.round(d.x * 13 + d.z * 7));
-    const roofZ1 = d.d / 2 - DUGOUT_OPEN_REAR;
     const c = Math.cos(d.yaw), s = Math.sin(d.yaw);
-    const keepTri = [];
+    const top = DUGOUT_MOUND * (d.collapsed ? 0.45 : 1);
     for (let i = 0; i < pos.count; i++) {
       const lx = pos.getX(i), lz = pos.getZ(i);
-      // Distance outside the outer wall rectangle.
-      const ox = Math.max(0, Math.abs(lx) - hw), oz = Math.max(0, Math.abs(lz) - hd);
-      const out = Math.hypot(ox, oz);
-      const wx = d.x + lx * c + lz * s, wz = d.z - lx * s + lz * c;
-      const ground = H(wx, wz) - d.y;
-      let y;
-      const inRoom = Math.abs(lx) < d.w / 2 && Math.abs(lz) < d.d / 2;
-      if (out > 0) {
-        const k = Math.min(1, out / BANK);
-        y = (h + 0.15) * (1 - k * k * (3 - 2 * k)) + (ground - 0.12) * k;
-      } else if (lz < roofZ1 + 0.1 || !inRoom) {
-        // Over the roof: a rounded mound of earth on the logs.
-        const nx = lx / hw, nz = (lz - (-hd + roofZ1) / 2) / (hd + roofZ1);
-        y = h + 0.24 + 0.35 * Math.max(0, 1 - nx * nx - nz * nz * 0.6) + (d.collapsed ? -0.25 : 0);
-      } else {
-        y = -10; // open rear: no earth (triangles dropped below)
-      }
-      y += (r() - 0.5) * 0.08;
+      const out = Math.hypot(Math.max(0, Math.abs(lx) - hw * 0.7), Math.max(0, Math.abs(lz) - hd * 0.7));
+      const k = Math.min(1, out / (BANKW + hw * 0.3));
+      const ground = H(d.x + lx * c + lz * s, d.z - lx * s + lz * c) - d.y;
+      let y = top * (1 - k * k * (3 - 2 * k)) + (ground - 0.06) * k * k;
+      if (d.collapsed) y -= 0.25 * Math.exp(-(lx * lx + lz * lz) / 2);
+      y += (r() - 0.5) * 0.07;
       pos.setY(i, y);
-      const k = 0.7 + r() * 0.35;
-      col.push(k, k * 0.96, k * 0.9);
+      const sh = 0.7 + r() * 0.35;
+      col.push(sh, sh * 0.96, sh * 0.9);
     }
     g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-    // Drop the triangles over the open rear part and the doorway.
+    if (d.player) {
+      const [rx0, rz0, rx1] = dugoutRampRect(d);
+      const idx = g.index.array, kept = [];
+      for (let i = 0; i < idx.length; i += 3) {
+        const mx = (pos.getX(idx[i]) + pos.getX(idx[i + 1]) + pos.getX(idx[i + 2])) / 3;
+        const mz = (pos.getZ(idx[i]) + pos.getZ(idx[i + 1]) + pos.getZ(idx[i + 2])) / 3;
+        if (mz > rz0 - 0.15 && mx > rx0 - 0.25 && mx < rx1 + 0.25) continue;
+        kept.push(idx[i], idx[i + 1], idx[i + 2]);
+      }
+      g.setIndex(kept);
+    }
+    g.rotateY(d.yaw);
+    g.translate(d.x, d.y, d.z);
+    g.computeVertexNormals();
+    return g;
+  }
+
+  // Camo net over the mound, pegged to the ground all round. On the player's dugout it also
+  // covers the deep part of the entrance ramp, stretched flat on poles at shoulder height.
+  function netGeo(d) {
+    const t = DUGOUT_WALL;
+    const hw = d.w / 2 + t + 0.4, hd = d.d / 2 + t + 0.4;
+    const SPREAD = 1.9;
+    const ramp = d.player ? dugoutRampRect(d) : null;
+    const rampEnd = ramp ? ramp[1] + (ramp[3] - ramp[1]) * 0.55 : 0;
+    const zMax = ramp ? Math.max(hd + SPREAD, rampEnd + 0.4) : hd + SPREAD;
+    const W = (hw + SPREAD) * 2, zMin = -hd - SPREAD;
+    const N = 26;
+    const g = new THREE.PlaneGeometry(W, zMax - zMin, N, N).rotateX(-Math.PI / 2).translate(0, 0, (zMax + zMin) / 2);
+    const pos = g.attributes.position, uv = g.attributes.uv;
+    const r = mulberry32(Math.round(d.x * 31 + d.z * 17 + 5));
+    const lumps = Array.from({ length: 5 }, () => [(r() - 0.5) * W * 0.6, (r() - 0.5) * (zMax - zMin) * 0.6, 0.08 + r() * 0.15]);
+    const c = Math.cos(d.yaw), s = Math.sin(d.yaw);
+    const top = DUGOUT_MOUND * (d.collapsed ? 0.45 : 1) + 0.22;
+    const inBand = (lx) => ramp && lx > ramp[0] - 0.45 && lx < ramp[2] + 0.45;
+    for (let i = 0; i < pos.count; i++) {
+      const lx = pos.getX(i), lz = pos.getZ(i);
+      const out = Math.hypot(Math.max(0, Math.abs(lx) - hw), Math.max(0, Math.abs(lz) - hd, lz > 0 && inBand(lx) ? 0 : -1));
+      const k = Math.min(1, Math.max(0, out) / SPREAD);
+      let y = top * (1 - k * k * (3 - 2 * k)) - 0.04;
+      y -= 0.1 * Math.abs(Math.sin(lx * 1.3)) * Math.abs(Math.sin(lz * 1.1)) * (1 - k);
+      for (const [bx, bz, a] of lumps) y += a * Math.exp(-((lx - bx) ** 2 + (lz - bz) ** 2) / 1.5) * (1 - k);
+      if (ramp && inBand(lx) && lz > ramp[1] - 0.6 && lz < rampEnd + 0.2) {
+        // Over the ramp: flat on its poles, sagging a little between them.
+        const sag = 0.08 * Math.sin(((lz - ramp[1]) / (rampEnd - ramp[1])) * Math.PI);
+        y = Math.max(y, 0.8 - sag - Math.max(0, Math.abs(lx - (ramp[0] + ramp[2]) / 2) - 0.7) * 0.9);
+      }
+      const wx = d.x + lx * c + lz * s, wz = d.z - lx * s + lz * c;
+      y = Math.max(y + d.y, H(wx, wz) + 0.05) - d.y;
+      pos.setY(i, y);
+      uv.setXY(i, lx / 2.2, lz / 2.2);
+    }
     const idx = g.index.array, kept = [];
     for (let i = 0; i < idx.length; i += 3) {
       const tri = [idx[i], idx[i + 1], idx[i + 2]];
-      if (tri.some((v) => pos.getY(v) < -5)) continue;
-      // Doorway cut: a notch through the rear bank.
       const mx = (pos.getX(tri[0]) + pos.getX(tri[1]) + pos.getX(tri[2])) / 3;
       const mz = (pos.getZ(tri[0]) + pos.getZ(tri[1]) + pos.getZ(tri[2])) / 3;
-      if (mz > d.d / 2 - 0.1 && mx > DUGOUT_DOOR[0] - 0.05 && mx < DUGOUT_DOOR[1] + 0.05) continue;
+      if (ramp && mz > rampEnd && mx > ramp[0] - 0.3 && mx < ramp[2] + 0.3) continue; // the way out stays open
+      if (d.collapsed && r() < 0.3) continue;                                            // torn
       kept.push(...tri);
     }
     g.setIndex(kept);
@@ -293,48 +366,6 @@ export function createFortifications({ scene, level }) {
     g.translate(d.x, d.y, d.z);
     g.computeVertexNormals();
     return g;
-  }
-
-  // Camo net draped over the dugout on poles, pegged to the ground all round.
-  function netGeo(d, h) {
-    const t = DUGOUT_WALL;
-    const hw = d.w / 2 + t + 0.3, hd = d.d / 2 + t + 0.3;
-    const SPREAD = 2.4;
-    const W = (hw + SPREAD) * 2, D = (hd + SPREAD) * 2, N = 26;
-    const g = new THREE.PlaneGeometry(W, D, N, N).rotateX(-Math.PI / 2);
-    const pos = g.attributes.position, uv = g.attributes.uv;
-    const r = mulberry32(Math.round(d.x * 31 + d.z * 17 + 5));
-    const lumps = Array.from({ length: 6 }, () => [(r() - 0.5) * W * 0.7, (r() - 0.5) * D * 0.7, 0.15 + r() * 0.25]);
-    const c = Math.cos(d.yaw), s = Math.sin(d.yaw);
-    const top = h + (d.collapsed ? 0.45 : 0.75);
-    for (let i = 0; i < pos.count; i++) {
-      const lx = pos.getX(i), lz = pos.getZ(i);
-      const ox = Math.max(0, Math.abs(lx) - hw), oz = Math.max(0, Math.abs(lz) - hd);
-      const out = Math.hypot(ox, oz);
-      const k = Math.min(1, out / SPREAD);
-      let y = top * (1 - k * k * (3 - 2 * k) * 1.02);
-      // Sags between the poles, lumps where it lies on things.
-      y -= 0.18 * Math.abs(Math.sin(lx * 1.3)) * Math.abs(Math.sin(lz * 1.1)) * (1 - k);
-      for (const [bx, bz, a] of lumps) y += a * Math.exp(-((lx - bx) ** 2 + (lz - bz) ** 2) / 1.5) * (1 - k);
-      // The flap over the doorway is tied up out of the way.
-      const doorX = (DUGOUT_DOOR[0] + DUGOUT_DOOR[1]) / 2;
-      if (lz > d.d / 2 && Math.abs(lx - doorX) < 1.1) y = Math.max(y, Math.min(top, 2.15) - Math.max(0, Math.abs(lx - doorX) - 0.6) * 1.2);
-      const wx = d.x + lx * c + lz * s, wz = d.z - lx * s + lz * c;
-      y = Math.max(y + d.y, H(wx, wz) + 0.06) - d.y;
-      pos.setY(i, y);
-      uv.setXY(i, lx / 2.2, lz / 2.2);
-    }
-    let geo = g;
-    if (d.collapsed) {
-      // Torn: drop chunks of the net.
-      const idx = g.index.array, kept = [];
-      for (let i = 0; i < idx.length; i += 6) if (r() > 0.3) kept.push(...idx.slice(i, i + 6));
-      g.setIndex(kept);
-    }
-    geo.rotateY(d.yaw);
-    geo.translate(d.x, d.y, d.z);
-    geo.computeVertexNormals();
-    return geo;
   }
 
   if (earthGeos.length) {
@@ -352,6 +383,19 @@ export function createFortifications({ scene, level }) {
     m.castShadow = true; m.receiveShadow = true;
     group.add(m);
   });
+
+  for (const [list, mat] of [[rampParts, plank], [rampFloors, floorMat]]) {
+    if (!list.length) continue;
+    const geo = keep(new THREE.BufferGeometry());
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(list, 3));
+    const uv = [];
+    for (let i = 0; i < list.length; i += 3) uv.push((list[i] + list[i + 2]) * 0.8, list[i + 1] * 0.8);
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, mat);
+    m.receiveShadow = true; m.castShadow = mat === plank;
+    group.add(m);
+  }
 
   // ---- Antenna masts ---------------------------------------------------------------------------
   const mastParts = [];
@@ -395,7 +439,7 @@ export function createFortifications({ scene, level }) {
         const ex = best.x + Math.cos(best.yaw) * (best.w / 2 + DUGOUT_WALL * 0.6) * Math.sign((m.x - best.x) * Math.cos(best.yaw) - (m.z - best.z) * Math.sin(best.yaw) || 1);
         const ez = best.z - Math.sin(best.yaw) * (best.w / 2 + DUGOUT_WALL * 0.6) * Math.sign((m.x - best.x) * Math.cos(best.yaw) - (m.z - best.z) * Math.sin(best.yaw) || 1);
         const x = m.x + (ex - m.x) * tt + Math.sin(tt * 9) * 0.25 * (1 - tt), z = m.z + (ez - m.z) * tt;
-        const y = Math.max(H(x, z) + 0.03, k === N ? best.y + best.h + 0.2 : H(x, z) + 0.03);
+        const y = Math.max(H(x, z) + 0.03, k === N ? best.y + DUGOUT_MOUND + 0.2 : H(x, z) + 0.03);
         guyPts.push(px, py, pz, x, y, z);
         px = x; py = y; pz = z;
       }
@@ -421,7 +465,7 @@ export function createFortifications({ scene, level }) {
   if (home) {
     const d = home, hw = d.w / 2, hd = d.d / 2;
     const room = new THREE.Group();
-    room.position.set(d.x, d.y, d.z);
+    room.position.set(d.x, d.y - d.depth, d.z);
     room.rotation.y = d.yaw;
     group.add(room);
     const add = (geo, mat, x, y, z, ry = 0, rx = 0) => {
@@ -504,10 +548,10 @@ export function createFortifications({ scene, level }) {
 
     // A bulb on a wire under the roof, and its warm light.
     const bulb = new THREE.Mesh(keep(new THREE.SphereGeometry(0.035, 10, 8)), keep(new THREE.MeshBasicMaterial({ color: 0xffd9a0 })));
-    bulb.position.set(0.1, d.h - 0.25, -0.4);
+    bulb.position.set(0.1, d.depth - 0.55, -0.4);
     room.add(bulb);
     const wire = new THREE.Mesh(keep(new THREE.CylinderGeometry(0.004, 0.004, 0.22, 4)), plastic);
-    wire.position.set(0.1, d.h - 0.13, -0.4); room.add(wire);
+    wire.position.set(0.1, d.depth - 0.43, -0.4); room.add(wire);
     lamp = new THREE.PointLight(0xffc98a, 2.2, 6, 1.6);
     lamp.position.copy(bulb.position).y -= 0.05;
     room.add(lamp);

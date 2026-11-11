@@ -53,11 +53,12 @@ export function addPropColliders(world, body, level, surfaces) {
     put(RAPIER.ColliderDesc.cuboid(0.31, 0.1, 0.15), [s.x, s.y, s.z], _q.clone(), 'sandbag');
   }
 
-  // Dugouts: log walls banked with earth and a log-and-earth roof over the front part.
+  // Dugouts: the mound, and for the player's one the room, door and ramp below ground.
   for (const d of pr.dugouts ?? []) {
-    const q = yawQ(d.yaw), cos = Math.cos(d.yaw), sin = Math.sin(d.yaw);
+    const cos = Math.cos(d.yaw), sin = Math.sin(d.yaw);
     for (const b of dugoutBoxes(d)) {
       const [lx, ly, lz] = b.c;
+      const q = yawQ(d.yaw).multiply(_q.setFromAxisAngle(X, b.rx ?? 0));
       put(RAPIER.ColliderDesc.cuboid(...b.half), [d.x + lx * cos + lz * sin, d.y + ly, d.z - lx * sin + lz * cos], q, 'dugout');
     }
   }
@@ -151,24 +152,42 @@ export class WireField {
   }
 }
 
-// Solid parts of a dugout in its local frame (floor centre at the origin, front wall towards −Z,
-// entrance gap in the rear wall). Shared with the visuals so the logs sit where the colliders are.
-export const DUGOUT_WALL = 0.8;      // wall + earth bank thickness
-export const DUGOUT_DOOR = [0.15, 1.05]; // entrance gap in the rear wall, local x
-export const DUGOUT_OPEN_REAR = 1.3; // the rear strip with no roof, only the net
+// Solid parts of a dugout in its local frame (ground level at the dugout's centre is y = 0, front
+// wall towards −Z, entrance in the rear wall). Shared with the visuals so the logs sit where the
+// colliders are. Every dugout is dug in: from outside it is a low earth mound under a net. The
+// player's dugout (`player: true`) is walkable inside: a room `depth` m below ground with log
+// walls, reached by a ramp from the rear door that leaves a hole in the ground (level.terrainHoles).
+export const DUGOUT_WALL = 0.5;          // log wall + packed earth behind it
+export const DUGOUT_DOOR = [0.15, 1.05];  // doorway in the rear wall, local x
+export const DUGOUT_RAMP = 3.8;           // length of the entrance ramp behind the door
+export const DUGOUT_MOUND = 0.45;         // earth heaped over the roof
+export function dugoutRampRect(d) {       // local [x0, z0, x1, z1] of the open ramp
+  return [DUGOUT_DOOR[0] - 0.15, d.d / 2, DUGOUT_DOOR[1] + 0.15, d.d / 2 + DUGOUT_RAMP];
+}
 export function dugoutBoxes(d) {
   const t = DUGOUT_WALL, hw = d.w / 2, hd = d.d / 2;
-  const h = d.collapsed ? d.h * 0.55 : d.h;
-  const out = [
-    { c: [0, h / 2, -hd - t / 2], half: [hw + t, h / 2, t / 2] },
-    { c: [-hw - t / 2, h / 2, 0], half: [t / 2, h / 2, hd] },
-    { c: [hw + t / 2, h / 2, 0], half: [t / 2, h / 2, hd] },
-  ];
+  if (!d.player) {
+    // Just the mound over the roof (it is solid ground for anything flying into it).
+    const k = d.collapsed ? 0.5 : 1;
+    return [{ c: [0, DUGOUT_MOUND * k * 0.5, 0], half: [hw + t, DUGOUT_MOUND * k * 0.5 + 0.05, hd + t] }];
+  }
+  const D = d.depth, y0 = -D, L = DUGOUT_RAMP;
   const [g0, g1] = DUGOUT_DOOR;
+  const out = [
+    { c: [0, y0 - 0.25, 0], half: [hw + t, 0.25, hd + t] },                         // floor
+    { c: [0, y0 + D / 2, -hd - t / 2], half: [hw + t, D / 2, t / 2] },              // front wall
+    { c: [-hw - t / 2, y0 + D / 2, 0], half: [t / 2, D / 2, hd] },                  // side walls
+    { c: [hw + t / 2, y0 + D / 2, 0], half: [t / 2, D / 2, hd] },
+  ];
   const l0 = -hw - t, r1 = hw + t;
-  out.push({ c: [(l0 + g0) / 2, h / 2, hd + t / 2], half: [(g0 - l0) / 2, h / 2, t / 2] });
-  out.push({ c: [(g1 + r1) / 2, h / 2, hd + t / 2], half: [(r1 - g1) / 2, h / 2, t / 2] });
-  const z0 = -hd - t, z1 = hd - DUGOUT_OPEN_REAR;
-  out.push({ c: [0, h + 0.22, (z0 + z1) / 2], half: [hw + t, 0.22, (z1 - z0) / 2] });
+  out.push({ c: [(l0 + g0) / 2, y0 + D / 2, hd + t / 2], half: [(g0 - l0) / 2, D / 2, t / 2] }); // rear wall, door gap
+  out.push({ c: [(g1 + r1) / 2, y0 + D / 2, hd + t / 2], half: [(r1 - g1) / 2, D / 2, t / 2] });
+  // Ramp: a sloping slab from the door sill up to the ground, with earth walls either side.
+  const [rx0, , rx1] = dugoutRampRect(d);
+  const s = Math.hypot(L, D), a = Math.atan2(D, L);
+  const nY = L / s, nZ = -D / s;
+  out.push({ c: [(rx0 + rx1) / 2, y0 + D / 2 - nY * 0.2, hd + L / 2 - nZ * 0.2], half: [(rx1 - rx0) / 2 + 0.3, 0.2, s / 2 + 0.05], rx: -a });
+  out.push({ c: [rx0 - 0.3, y0 / 2, hd + L / 2], half: [0.3, D / 2, L / 2] });
+  out.push({ c: [rx1 + 0.3, y0 / 2, hd + L / 2], half: [0.3, D / 2, L / 2] });
   return out;
 }

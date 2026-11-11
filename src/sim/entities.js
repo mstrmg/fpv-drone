@@ -89,6 +89,13 @@ export const VARIANTS = {
       seats: [seat('driver', [-0.5, 0.5, -0.4], 0.9, 1), seat('troop', [0.5, 0.5, -0.4], 0.9, 1)],
       parts: { engine: part([0, 0.45, -0.8], 0.6), fuel: part([0, 0.25, 0.4], 0.5) },
     },
+    atv: {                                                   // quad bike: one rider, fast, no protection at all
+      size: [1.2, 1.3, 2.1], walk: 8, run: 17, turnRate: 2.6, accel: 7, frag: 0.8, blast: 1.1, hearing: 35,
+      seats: [seat('driver', [0, 0.65, 0.1], 1.0, 1)],
+      parts: { engine: part([0, 0.35, 0], 0.35), fuel: part([0, 0.55, -0.35], 0.25) },
+      crewBlast: 1.0, crewFrag: 1.8, crewShield: 1, engineBlast: 0.7, engineFrag: 0.8, fuelFrag: 0.7, fuelFire: 0.6,
+      cookoff: { chance: 0.3, delay: [0.5, 1.5], kind: 'vehicle', chargeKg: 0.05, radius: 1.5, fragmentRadius: 4, fragmentLethality: 0.15 },
+    },
     technical: {                                             // pickup with a mounted heavy MG
       size: [2.0, 2.3, 5.2], run: 19, turret: 2.0, hearing: 25,
       seats: [seat('driver', [-0.5, 0.45, -0.4], 0.9, 1), seat('troop', [0.5, 0.45, -0.4], 0.9, 1), seat('gunner', [0, 0.9, 0.45], 1.0, 1)],
@@ -144,6 +151,20 @@ export const VARIANTS = {
       cookoff: { chance: 0.8, delay: [2, 5], kind: 'ammo', chargeKg: 1.8, radius: 6, fragmentRadius: 25, fragmentLethality: 0.7, turretToss: false },
     },
   },
+};
+
+// Where troops ride on the outside of a vehicle ("riders" in a level's enemy def): hull-local seat
+// surface [x, y, z] and the way the man faces (yaw relative to the hull; ±π/2 = sideways, legs over
+// the edge). Filled in order.
+const SIDE = Math.PI / 2;
+export const RIDER_SEATS = {
+  pickup: [[0.9, 1.28, 0.9, -SIDE], [-0.9, 1.28, 1.2, SIDE], [0.9, 1.28, 2.0, -SIDE], [-0.9, 1.28, 2.2, SIDE]],
+  technical: [[0.9, 1.28, 0.4, -SIDE], [-0.9, 1.28, 0.6, SIDE], [-0.9, 1.28, 2.2, SIDE]],
+  uaz: [[0.55, 1.92, 1.2, -SIDE], [-0.55, 1.92, 1.5, SIDE]],
+  btr: [[1.0, 2.06, 0.9, -SIDE], [-1.0, 2.06, 1.3, SIDE], [0.95, 2.04, 2.4, -SIDE], [-0.95, 2.04, 2.7, SIDE], [0.3, 2.05, 3.2, Math.PI]],
+  bmp: [[1.15, 1.55, 1.2, -SIDE], [-1.15, 1.55, 1.5, SIDE], [1.1, 1.52, 2.4, -SIDE], [-1.1, 1.52, 2.6, SIDE]],
+  mtlb: [[1.05, 1.66, 0.3, -SIDE], [-1.05, 1.66, 0.6, SIDE], [1.05, 1.64, 1.8, -SIDE], [-1.05, 1.64, 2.1, SIDE], [0, 1.64, 2.9, Math.PI]],
+  ural: [[0.9, 2.75, 1.0, -SIDE], [-0.9, 2.75, 1.6, SIDE]],
 };
 
 export function resolveType(kind, variant) {
@@ -214,6 +235,7 @@ export function createEntities(ctx) {
         bailing: false, abandoned: false, fire: 'none', smoke: 'none', components: {},
       } : {
         condition: 'ok', wounds: { head: 1, torso: 1, armL: 1, armR: 1, legL: 1, legR: 1 }, mobility: 1, bleeding: false,
+        riding: null, // vehicle id while sitting on top of it (position = the point he sits on)
         ...(e.fromVehicle ? { fromVehicle: e.fromVehicle } : {}),
       }),
     };
@@ -252,7 +274,46 @@ export function createEntities(ctx) {
       applyDamage: (hit) => applyDamage(e, hit),
     });
     place(e);
+    // Troops riding on top: infantry entities that move with the hull until they jump off.
+    const seats = RIDER_SEATS[type.variant] ?? [];
+    (def.riders ?? []).slice(0, seats.length).forEach((variant, i) => {
+      const r = spawn({ kind: 'infantry', variant, position: [def.position[0], def.position[1]], yaw: def.yaw ?? 0 });
+      r.rideSpawn = { veh: e, seat: seats[i] };
+      r.ride = r.rideSpawn;
+      follow(r);
+    });
     return e;
+  }
+
+  // Sit a rider on his seat on the hull.
+  function follow(r) {
+    const { veh, seat } = r.ride;
+    _e.set(veh.pitch, veh.yaw, veh.roll, 'YXZ');
+    _q.setFromEuler(_e);
+    const w = _loc.set(seat[0], seat[1], seat[2]).applyQuaternion(_q);
+    r.x = veh.x + w.x; r.y = veh.y + w.y; r.z = veh.z + w.z;
+    r.yaw = veh.yaw + seat[3]; r.pitch = veh.pitch; r.roll = veh.roll; r.speed = 0;
+    r.status = 'idle';
+    sync(r);
+    r.s.riding = veh.id;
+    r.s.velocity[0] = -Math.sin(veh.yaw) * veh.speed; r.s.velocity[2] = -Math.cos(veh.yaw) * veh.speed;
+  }
+
+  // Off the vehicle: down to the ground on his side of the hull.
+  function dismount(r) {
+    const { veh, seat } = r.ride;
+    r.ride = null;
+    r.s.riding = null;
+    const side = Math.sign(seat[0]) || 1, c = Math.cos(veh.yaw), sn = Math.sin(veh.yaw);
+    const lx = side * (veh.def.size[0] / 2 + 0.7), lz = seat[2];
+    r.x = veh.x + lx * c + lz * sn; r.z = veh.z - lx * sn + lz * c;
+    r.pitch = r.roll = 0;
+    if (r.alerted && r.cond === 'ok') {
+      r.mode = rand() < 0.5 ? 'prone' : 'flee';
+      r.proneUntil = time + PRONE_SECONDS;
+      r.fleeHeading = Math.atan2(r.x - veh.x, r.z - veh.z) + Math.PI + (rand() - 0.5);
+    }
+    ground(r); sync(r);
   }
 
   function remove(e) {
@@ -269,6 +330,8 @@ export function createEntities(ctx) {
     e.wp = 0; e.waitUntil = time + rand() * 3;
     e.alerted = false; e.noticeT = 0; e.calmT = 0; e.mode = 'patrol'; e.proneUntil = 0;
     e.reactAfter = 0.6 + rand() * 1.0;
+    e.ride = e.rideSpawn ?? null;
+    if (e.s) e.s.riding = e.ride ? e.ride.veh.id : null;
     if (e.def.vehicle) {
       initVehicle(e, rand); e.health = vehicleHealth(e);
       e.s.weakSpots = Object.entries(e.v.comps).map(([name, c]) => ({ name, position: c.position, radius: c.radius }));
@@ -376,6 +439,7 @@ export function createEntities(ctx) {
 
   function killInfantry(e, cause) {
     if (e.destroyed) return;
+    if (e.ride) dismount(e); // falls off
     e.destroyed = true; e.speed = 0; e.health = 0;
     sync(e);
     ctx.emit({ type: 'entity_destroyed', entityId: e.id, kind: e.kind, position: [e.x, e.y + e.def.size[1] / 2, e.z], cause });
@@ -532,6 +596,20 @@ export function createEntities(ctx) {
         e.health = infantryHealth(e);
         killInfantry(e, 'bleedout');
         continue;
+      }
+      if (e.ride) {
+        // Riding: jump off when the vehicle is knocked out, or stops while they're alarmed;
+        // the wounded fall off.
+        const veh = e.ride.veh;
+        const stop = veh.destroyed || veh.v.abandoned || !veh.v.operational || veh.v.mobility === 'immobilized';
+        if (stop || e.cond !== 'ok' || (e.alerted && veh.speed < 1.5)) dismount(e);
+        else {
+          if (drone.active && !e.alerted && Math.hypot(e.x - drone.position[0], e.y - drone.position[1], e.z - drone.position[2]) < e.def.hearing + drone.speed * 4) {
+            e.noticeT += dt; if (e.noticeT > e.reactAfter) alert(e);
+          }
+          follow(e);
+          continue;
+        }
       }
       e.mult = moveFactor(e);
       if (!e.def.vehicle && (e.cond === 'down' || e.cond === 'crawling')) {

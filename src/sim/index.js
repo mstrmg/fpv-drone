@@ -37,11 +37,23 @@ function buildStaticWorld(world, level) {
       verts[i * 3 + 2] = -terrain.size / 2 + iz * step;
     }
   }
+  // Holes cut in the ground (a dugout's entrance ramp): whole grid cells are left out of the
+  // trimesh and the parts of them outside the hole are capped with thin flat boxes.
+  const holes = level.terrainHoles ?? [];
+  const cut = [];
+  const overlaps = (r, h) => r[0] < h[2] && r[2] > h[0] && r[1] < h[3] && r[3] > h[1];
   const idx = new Uint32Array(terrain.segments * terrain.segments * 6);
   let k = 0;
   for (let iz = 0; iz < terrain.segments; iz++) {
     for (let ix = 0; ix < terrain.segments; ix++) {
       const a = iz * n + ix, b = a + 1, c = a + n, d = c + 1;
+      if (holes.length) {
+        const cell = [-terrain.size / 2 + ix * step, -terrain.size / 2 + iz * step, -terrain.size / 2 + (ix + 1) * step, -terrain.size / 2 + (iz + 1) * step];
+        if (holes.some((h) => overlaps(cell, h))) {
+          cut.push({ cell, y: (terrain.heights[a] + terrain.heights[b] + terrain.heights[c] + terrain.heights[d]) / 4 });
+          continue;
+        }
+      }
       // Triangles (a,d,b) and (a,c,d): diagonal a→d, normals +Y. Matches heightAt().
       idx[k++] = a; idx[k++] = d; idx[k++] = b;
       idx[k++] = a; idx[k++] = c; idx[k++] = d;
@@ -49,8 +61,27 @@ function buildStaticWorld(world, level) {
   }
   const surfaces = new Map(); // collider handle → { surface, objectId }
   const ground = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-  const gc = world.createCollider(RAPIER.ColliderDesc.trimesh(verts, idx).setFriction(0.8), ground);
+  const gc = world.createCollider(RAPIER.ColliderDesc.trimesh(verts, idx.subarray(0, k)).setFriction(0.8), ground);
   surfaces.set(gc.handle, { surface: 'ground', objectId: null });
+  for (const { cell, y } of cut) {
+    let pieces = [cell];
+    for (const h of holes) {
+      pieces = pieces.flatMap((r) => {
+        if (!overlaps(r, h)) return [r];
+        const out = [];
+        if (h[0] > r[0]) out.push([r[0], r[1], h[0], r[3]]);
+        if (h[2] < r[2]) out.push([h[2], r[1], r[2], r[3]]);
+        const x0 = Math.max(r[0], h[0]), x1 = Math.min(r[2], h[2]);
+        if (h[1] > r[1]) out.push([x0, r[1], x1, h[1]]);
+        if (h[3] < r[3]) out.push([x0, h[3], x1, r[3]]);
+        return out;
+      });
+    }
+    for (const [x0, z0, x1, z1] of pieces) {
+      const c = world.createCollider(RAPIER.ColliderDesc.cuboid((x1 - x0) / 2, 0.1, (z1 - z0) / 2).setTranslation((x0 + x1) / 2, y - 0.1, (z0 + z1) / 2).setFriction(0.8), ground);
+      surfaces.set(c.handle, { surface: 'ground', objectId: null });
+    }
+  }
 
   for (const o of level.objects) {
     const [x, y, z] = o.position;
