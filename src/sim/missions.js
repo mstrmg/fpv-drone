@@ -33,7 +33,7 @@ export function createMissions({ level, entities, state, emit }) {
     bearing: null,          // { fromHome: { deg, m }, fromDrone: { deg, m } | null, moving: 'east' | ... | null }: where the targets are
   };
   state.mission = list.length ? m : null;
-  if (!list.length) return { update() {}, skip() { return false; }, reset() {} };
+  if (!list.length) return { update() {}, skip() { return false; }, reset() {}, next() {} };
 
   let index = -1, script = [], step = 0, clock = 0, lineEnds = 0, waiting = 0;
   let targets = [];
@@ -221,7 +221,14 @@ export function createMissions({ level, entities, state, emit }) {
     return true;
   }
 
+  // Key 7: on to the next mission straight away (whatever is left of this one stays where it is).
+  function next() {
+    if (index < 0 || index >= list.length) return;
+    emit({ type: 'mission', id: m.id, phase: 'skipped', title: m.title });
+    start(index + 1);
+  }
+
   function reset() { index = -1; m.phase = 'none'; m.line = null; m.cutscene = null; }
 
-  return { update, skip, reset };
+  return { update, skip, reset, next };
 }

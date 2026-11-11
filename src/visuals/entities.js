@@ -1203,6 +1203,7 @@ export function createEntities({ scene, level, smoke, fire }) {
 
       if (v.kind === 'infantry') {
         if (e.status === 'destroyed' && !v.dead) killSoldier(v, e);
+        v.root.visible = !(e.riding && byId.get(e.riding)?.status === 'escaped'); // got away with their vehicle
         updateSoldier(v, e, dt, speed, drone);
         continue;
       }

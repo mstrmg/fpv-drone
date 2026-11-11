@@ -62,7 +62,7 @@ export function createVisuals({ canvas, uiRoot, level }) {
   const help = document.createElement('div');
   help.style.cssText = 'position:absolute;left:50%;bottom:3.2%;transform:translateX(-50%);font-size:12px;letter-spacing:.04em;padding:6px 12px;background:rgba(0,0,0,.45);border-radius:3px;white-space:nowrap;transition:opacity 2s;';
   const FLY_HELP = 'W/S throttle · A/D yaw · arrows pitch/roll · Space arm · R reset · M mode · P pause' + (level.start ? ' · E / ◯ goggles off' : '');
-  const FOOT_HELP = 'WASD walk · click + mouse (or arrows / right stick) look · Shift run · E / ✕ at the table: goggles on';
+  const FOOT_HELP = 'WASD walk · click + mouse (or arrows / right stick) look · Shift run · E / ✕ at the table: goggles on' + (level.missions?.length ? ' · 7 skip mission' : '');
   help.textContent = level.start ? FOOT_HELP : FLY_HELP;
   const prompt = document.createElement('div');
   prompt.style.cssText = 'position:absolute;left:50%;top:58%;transform:translateX(-50%);display:none;font-size:13px;letter-spacing:.12em;padding:5px 12px;background:rgba(0,0,0,.4);border-radius:3px;white-space:nowrap;';

@@ -19,6 +19,7 @@ export const KEY_BINDINGS = {
   resetTargets: ['KeyT'],
   interact: ['KeyE'],          // on foot: put the goggles on
   goggles: ['KeyE', 'KeyG'],   // flying: take them off again (campaign)
+  skipMission: ['Digit7', 'Numpad7'], // campaign: skip to the next mission
 };
 
 // On foot (campaign start): WASD walk, mouse (click to capture) or arrows look, Shift run.
@@ -45,7 +46,7 @@ export const DEFAULT_INPUT_SETTINGS = {
   keyLookRate: 1.8,         // rad/s with the arrow keys
 };
 
-const EDGE_ACTIONS = ['arm', 'reset', 'toggleMode', 'pause', 'fire', 'resetTargets', 'interact', 'goggles'];
+const EDGE_ACTIONS = ['arm', 'reset', 'toggleMode', 'pause', 'fire', 'resetTargets', 'interact', 'goggles', 'skipMission'];
 const PAD_EDGES = { arm: ['l1', 'l2'], reset: ['options', 'triangle'], toggleMode: ['square'], pause: ['create'], fire: ['r2', 'cross'], interact: ['cross'], goggles: ['circle'] };
 
 export function createInput(target = window, settings = {}) {

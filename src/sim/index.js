@@ -399,6 +399,7 @@ export async function createSim({ level, settings = {} }) {
   function handleEdges(c) {
     if (c.pause) state.paused = !state.paused;
     if (state.paused) return;
+    if (c.skipMission) missions?.next();
     if (state.mode === 'foot') {
       if ((c.interact || c.goggles) && missions?.skip()) return; // skip the briefing
       if ((c.interact || c.goggles) && walker.state.nearGoggles && !state.mission?.cutscene) setMode('drone');

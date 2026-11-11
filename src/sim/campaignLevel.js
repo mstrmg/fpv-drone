@@ -308,6 +308,16 @@ export function createCampaignLevel() {
     m.enemy('light', variant, x, z, { patrol: [[x, z], ...RUN], speed, route: true, waitFor: 'convoy', mission: 'convoy', yaw: -Math.PI / 2 });
   });
 
+  // ---- Mission 3: a supply column down the village road to the front ---------------------------
+  // BTR with infantry riding on top, two trucks, an MT-LB at the back, at a crawl on a bad road.
+  // From the far end of the map to the junction behind their line: about three and a half minutes.
+  const SUPPLY = [[520, -960], [500, -820], [470, -560], [446, -380]];
+  [['apc', 'btr', -1440, { riders: ['rifleman', 'mg', 'rifleman', 'rpg'] }], ['truck', 'kamaz', -1466, {}],
+    ['truck', 'ural', -1492, {}], ['apc', 'mtlb', -1518, {}]].forEach(([kind, variant, z, extra]) => {
+    const x = 500 + 20 * (z + 1536) / 576;
+    m.enemy(kind, variant, x, z, { patrol: [[x, z], ...SUPPLY], speed: 4.6, route: true, waitFor: 'supply', mission: 'supply', yaw: Math.PI, ...extra });
+  });
+
   // ---- Missions ---------------------------------------------------------------------------------
 
   const missions = [{
@@ -353,6 +363,33 @@ export function createCampaignLevel() {
       { after: 5, say: 'Hold on... more of them. Same road, bearing {brg}, {rng} metres.', dur: 4,
         shot: { look: 'targets', range: 400, height: 160, bearing: 0.9, fov: 11, drift: 0.004 } },
       { say: 'Don\'t let these ones go.', dur: 2.5 },
+    ],
+  }, {
+    id: 'supply',
+    title: 'Supply line',
+    objective: 'Stop the supply column on the village road before it reaches their line',
+    intro: [
+      { after: 6, say: 'Look at this. A whole column on the village road.', dur: 3.5,
+        shot: { look: 'targets', range: 600, height: 230, bearing: 2.6, fov: 12, drift: 0.004 } },
+      { say: 'BTR up front with infantry on the back, two trucks, and an MT-LB at the tail.', dur: 6,
+        shot: { look: 'targets', range: 300, height: 120, bearing: 2.9, fov: 13, drift: 0.005 } },
+      { say: 'Bearing {brg}, {rng} metres, coming {dir} towards their line. Slow, the road\'s bad.', dur: 6,
+        shot: { look: 'targets', range: 450, height: 180, bearing: 2.4, fov: 15, drift: 0.004 } },
+      { say: 'You\'ve got a few minutes. Stop all four before they get to the junction.', dur: 4.5 },
+    ],
+    outro: [
+      { after: 1.5, say: 'That column\'s done. Their line goes hungry tonight.', dur: 4 },
+    ],
+    outroPartial: [
+      { after: 1.5, say: 'Some of it got through to the junction. Damn.', dur: 3.5 },
+    ],
+    outroFailed: [
+      { after: 1.5, say: 'The whole column got through.', dur: 3 },
+    ],
+    retry: [
+      { after: 5, say: 'Another column. Same road, bearing {brg}, {rng} metres.', dur: 4,
+        shot: { look: 'targets', range: 450, height: 180, bearing: 2.6, fov: 13, drift: 0.004 } },
+      { say: 'Stop this one.', dur: 2.2 },
     ],
   }];
 

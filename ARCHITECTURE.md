@@ -326,6 +326,7 @@ when `surface === 'ground'`, a scorch decal on buildings, fragment sparks out to
 Controls = {
   throttle: 0..1, yaw: -1..1, pitch: -1..1, roll: -1..1, // pitch +1 = stick forward (nose down), roll +1 = right, yaw +1 = right
   arm, reset, toggleMode, pause, fire, resetTargets,        // edge-triggered booleans (true for one poll); fire = detonate
+  skipMission,                                              // campaign: key 7 skips to the next mission
   interact, goggles,                                        // on foot: either puts the goggles on (at the table); flying: goggles takes them off
   moveX, moveZ: -1..1, lookX, lookY: radians this poll, sprint: boolean,   // on foot (moveZ +1 = forward, lookX + = turn right)
 }
