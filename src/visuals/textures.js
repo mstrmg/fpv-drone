@@ -134,21 +134,6 @@ export function makeGrassTexture() {
   return canvasTexture(c);
 }
 
-export function makeSoftParticleTexture() {
-  const S = 128;
-  const [c, g] = canvas(S, S);
-  const rand = mulberry32(8);
-  for (let i = 0; i < 26; i++) {
-    const x = S / 2 + (rand() - 0.5) * S * 0.42, y = S / 2 + (rand() - 0.5) * S * 0.42, r = S * (0.14 + rand() * 0.2);
-    const gr = g.createRadialGradient(x, y, 0, x, y, r);
-    gr.addColorStop(0, 'rgba(255,255,255,0.16)');
-    gr.addColorStop(1, 'rgba(255,255,255,0)');
-    g.fillStyle = gr;
-    g.fillRect(0, 0, S, S);
-  }
-  return canvasTexture(c, { srgb: false });
-}
-
 function speckle(g, w, h, rand, n, dark, alpha) {
   for (let i = 0; i < n; i++) {
     g.fillStyle = `rgba(${dark},${dark},${dark},${rand() * alpha})`;

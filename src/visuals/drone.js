@@ -1,5 +1,5 @@
-// The player's quad: a 7-inch carbon FPV frame with top-mounted battery, seen in chase view and,
-// at the edges of the frame, from its own camera.
+// The player's quad: a 7-inch carbon FPV frame with top-mounted battery, seen at the edges of the
+// frame from its own camera and from outside by the spotter.
 import * as THREE from 'three';
 import { makeCarbonTexture, makePropBlurTexture } from './textures.js';
 
@@ -104,15 +104,35 @@ export function createDrone({ scene }) {
     rx.rotation.set(0.5, 0, -s * 0.5);
   }
 
+  // Warhead slung under the frame: a shaped-charge round held on with tape, fuse wires at the nose.
+  const olive = std({ color: 0x3f4a2c, roughness: 0.7, metalness: 0.2 });
+  const tape = std({ color: 0x9a9a94, roughness: 0.8 });
+  const copper = std({ color: 0xb87333, roughness: 0.35, metalness: 0.9 });
+  const war = new THREE.Group();
+  war.position.set(0, -0.052, -0.02);
+  war.rotation.x = Math.PI / 2; // cylinders run along the body's Z axis
+  group.add(war);
+  add(cyl(0.036, 0.036, 0.11, 18), olive, 0, 0.0, 0, war);
+  add(cyl(0.012, 0.036, 0.1, 18), olive, 0, -0.105, 0, war);   // nose cone, pointing forward
+  add(cyl(0.008, 0.012, 0.03, 12), steel, 0, -0.17, 0, war);   // fuse
+  add(cyl(0.036, 0.016, 0.05, 18), olive, 0, 0.08, 0, war);
+  add(cyl(0.016, 0.016, 0.12, 12), olive, 0, 0.165, 0, war);   // tail tube
+  add(cyl(0.0372, 0.0372, 0.018, 18), tape, 0, -0.03, 0, war);
+  add(cyl(0.0372, 0.0372, 0.018, 18), tape, 0, 0.035, 0, war);
+  for (const sx of [-1, 1]) {
+    const wire = add(cyl(0.0008, 0.0008, 0.07, 4), copper, sx * 0.012, -0.205, 0, war);
+    wire.rotation.z = sx * 0.25;
+  }
+
   scene.add(group);
 
   return {
     group,
-    update(d, tiltDeg, view, dt) {
+    update(d, tiltDeg, fpv, dt) {
       group.position.fromArray(d.position);
       group.quaternion.fromArray(d.quaternion);
       cam.rotation.x = THREE.MathUtils.degToRad(tiltDeg);
-      cam.visible = view !== 'fpv'; // it would sit inside the lens
+      cam.visible = !fpv; // it would sit inside the lens
       let maxBlur = 0;
       for (let i = 0; i < 4; i++) {
         const p = props[i], rpm = d.crashed ? 0 : d.motors[i];

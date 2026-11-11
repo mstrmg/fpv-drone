@@ -18,7 +18,7 @@ const vert = /* glsl */ `
 
 const frag = /* glsl */ `
   uniform sampler2D tScene, tOsd;
-  uniform float uTime, uSignal, uJam, uLost, uGlitch, uAnalog, uAspect, uExposure, uOsd;
+  uniform float uTime, uSignal, uJam, uLost, uGlitch, uAnalog, uAspect, uExposure, uOsd, uSpotter;
   varying vec2 vUv;
   const vec3 LW = vec3(0.299, 0.587, 0.114);
 
@@ -56,6 +56,11 @@ const frag = /* glsl */ `
     if (uAnalog < 0.5) {
       vec3 c = src(uv);
       c *= 1.0 - dot(vc, vc) * 0.35;
+      if (uSpotter > 0.5) {
+        // Long-lens digital camera: flatter, a little soft, hazy blacks, compression grain.
+        c = mix(vec3(dot(c, LW)), c, 0.8) * 0.94 + 0.045;
+        c += (hash12(floor(gl_FragCoord.xy / 2.0) + uTime * 30.0) - 0.5) * 0.03;
+      }
       c += (hash12(gl_FragCoord.xy + uTime * 60.0) - 0.5) * 0.012;
       gl_FragColor = vec4(c, 1.0);
       return;
@@ -114,7 +119,7 @@ export function createFeed({ renderer }) {
   const u = {
     tScene: { value: rt.texture }, tOsd: { value: blank },
     uTime: { value: 0 }, uSignal: { value: 1 }, uJam: { value: 0 }, uLost: { value: 0 }, uGlitch: { value: 0 },
-    uAnalog: { value: 1 }, uAspect: { value: 1 }, uExposure: { value: 1 }, uOsd: { value: 1 },
+    uSpotter: { value: 0 }, uAnalog: { value: 1 }, uAspect: { value: 1 }, uExposure: { value: 1 }, uOsd: { value: 1 },
   };
   const mat = new THREE.ShaderMaterial({ uniforms: u, vertexShader: vert, fragmentShader: frag, depthTest: false, depthWrite: false });
   const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);

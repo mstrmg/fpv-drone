@@ -129,7 +129,25 @@ function buildLocalMap(level) {
   // Trampled launch spot.
   blob(level.spawn.position[0], level.spawn.position[2], 7, '0,255,0', 0.95);
   const tex = canvasTexture(c, { srgb: false, aniso: 4, flipY: false });
-  return { localMap: tex, tracks };
+  // Blast mark: churned bare earth in the middle, soot and thrown soil around it.
+  const scorch = (x, z, radius) => {
+    if (Math.abs(x) > half || Math.abs(z) > half) return;
+    blob(x, z, radius * 0.5, '0,255,0', 1);
+    blob(x, z, radius * 0.5, '0,255,0', 1);
+    blob(x, z, radius * 0.95, '255,0,0', 1);
+    blob(x, z, radius * 0.6, '255,0,0', 1);
+    g.fillStyle = 'rgba(255,60,0,0.55)';
+    for (let i = 0; i < 16; i++) {
+      const a = Math.random() * Math.PI * 2, len = radius * (0.9 + Math.random() * 1.1), w = 0.06 + Math.random() * 0.1;
+      g.beginPath();
+      g.moveTo(X(x + Math.cos(a - w) * radius * 0.3), X(z + Math.sin(a - w) * radius * 0.3));
+      g.lineTo(X(x + Math.cos(a) * len), X(z + Math.sin(a) * len));
+      g.lineTo(X(x + Math.cos(a + w) * radius * 0.3), X(z + Math.sin(a + w) * radius * 0.3));
+      g.fill();
+    }
+    tex.needsUpdate = true;
+  };
+  return { localMap: tex, tracks, scorch };
 }
 
 function buildHeightTexture(terrain) {
@@ -213,7 +231,8 @@ const fragAlbedo = /* glsl */ `
   float litter = smoothstep(0.2, 0.8, loc.b + (d1.a - 0.5) * 0.7);
   alb = mix(alb, vec3(0.17, 0.10, 0.045) * (0.7 + 0.6 * d1.b), litter * 0.62);
 
-  alb *= 1.0 - loc.r * 0.62;
+  alb *= 1.0 - min(loc.r, 1.0) * 0.62;
+  alb *= 1.0 - smoothstep(0.75, 1.0, loc.r) * loc.g * 0.5; // soot where a blast has burnt bare earth
   diffuseColor.rgb = alb;
   float groundRough = mix(0.97, 0.3, wet);
 `;
@@ -228,7 +247,7 @@ const fragNormal = /* glsl */ `
 export function createTerrain({ scene, level, detailTex }) {
   const { terrain } = level;
   const fields = buildFieldMaps(level);
-  const { localMap, tracks } = buildLocalMap(level);
+  const { localMap, tracks, scorch } = buildLocalMap(level);
   const heightTex = buildHeightTexture(terrain);
 
   const geo = new THREE.PlaneGeometry(terrain.size, terrain.size, terrain.segments, terrain.segments);
@@ -267,6 +286,7 @@ export function createTerrain({ scene, level, detailTex }) {
   return {
     maps: { fieldColor: fields.fieldColor, fieldData: fields.fieldData, localMap, heightTex },
     tracks,
+    scorch,
     dispose() {
       geo.dispose(); skirtGeo.dispose(); mat.dispose();
       fields.fieldColor.dispose(); fields.fieldData.dispose(); localMap.dispose(); heightTex.dispose();
