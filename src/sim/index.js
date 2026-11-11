@@ -4,6 +4,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { Quaternion, Vector3 } from 'three';
 import { FlightModel } from './flightModel.js';
 import { Wind } from './environment.js';
+import { createEntities } from './entities.js';
 import { WARHEADS, ARM_DISTANCE_M, FUZE_IMPACT_SPEED, JET_REACH_M, blastAt, DamageRegistry } from './warhead.js';
 
 export const SIM_HZ = 240;
@@ -90,6 +91,7 @@ export async function createSim({ level, settings = {} }) {
   const warhead = WARHEADS[opts.warhead] ?? WARHEADS.none;
   fm.setPayload(warhead.massKg, warhead.lengthM);
   const damage = new DamageRegistry();
+  const entityColliders = new Map(); // collider handle → entity id
   const wind = new Wind({ seed: level.seed * 13 + 1, meanSpeed: opts.wind ? 3 : 0, gustStrength: opts.wind ? 1.8 : 0 });
 
   const body = world.createRigidBody(
@@ -123,6 +125,20 @@ export async function createSim({ level, settings = {} }) {
     env: { wind: wind.value },
     entities: [],
   };
+
+  // Secondary explosions (ammo cook-off, fuel fires) from destroyed vehicles.
+  function explode(x) {
+    const w = { chargeKg: x.chargeKg, radius: x.radius, fragmentRadius: x.fragmentRadius, fragmentLethality: x.fragmentLethality ?? 0.5, shaped: false, penetrationMm: 0 };
+    emit({
+      type: 'explosion', position: x.position, normal: [0, 1, 0], surface: 'entity', objectId: x.objectId, kind: x.kind,
+      chargeKg: w.chargeKg, radius: w.radius, fragmentRadius: w.fragmentRadius, shaped: false, direction: [0, 1, 0], cause: 'cookoff',
+    });
+    applyBlast(x.position, [0, 1, 0], w, x.ignoreHandle);
+  }
+  const entities = createEntities({
+    world, level, emit: (e) => emit(e), damage, explode, registerCollider: (h, id) => entityColliders.set(h, id),
+  });
+  state.entities = entities.states;
 
   let flightTime = 0;
   let throttleWarnUntil = -1;
@@ -182,21 +198,19 @@ export async function createSim({ level, settings = {} }) {
     const info = surfaces.get(hit.collider.handle) ?? entitySurface(hit.collider);
     return { ...info, normal: [hit.normal.x, hit.normal.y, hit.normal.z], toi: hit.timeOfImpact ?? hit.toi };
   }
-  // Entities (M2 targets) register colliders here later.
-  const entityColliders = new Map();
   function entitySurface(collider) {
     const id = entityColliders.get(collider.handle);
     return id ? { surface: 'entity', objectId: id } : { surface: 'ground', objectId: null };
   }
 
-  function lineOfSight(from, to, ignoreBodyHandle) {
+  function lineOfSight(from, to, ignoreBodyHandle, ignoreBodyHandle2) {
     _to.set(to[0] - from[0], to[1] - from[1], to[2] - from[2]);
     const dist = _to.length();
     if (dist < 1e-3) return true;
     _to.divideScalar(dist);
     const ray = new RAPIER.Ray({ x: from[0], y: from[1], z: from[2] }, _to);
     const hit = world.castRay(ray, dist, true, undefined, undefined, undefined, body,
-      ignoreBodyHandle != null ? (c) => c.parent()?.handle !== ignoreBodyHandle : undefined);
+      ignoreBodyHandle != null ? (c) => { const h = c.parent()?.handle; return h !== ignoreBodyHandle && h !== ignoreBodyHandle2; } : undefined);
     return !hit || (hit.timeOfImpact ?? hit.toi) >= dist - 0.3;
   }
 
@@ -235,28 +249,34 @@ export async function createSim({ level, settings = {} }) {
     emit({ type: 'drone_lost', reason: 'detonated', respawnIn: RESPAWN_DELAY });
   }
 
-  function applyBlast(origin, direction, w) {
-    for (const t of damage.targets.values()) {
+  function applyBlast(origin, direction, w, ignoreHandle) {
+    for (const t of [...damage.targets.values()]) {
       const tp = t.position();
       const dx = tp[0] - origin[0], dy = tp[1] - origin[1], dz = tp[2] - origin[2];
       const centre = Math.hypot(dx, dy, dz);
-      const distance = Math.max(0, centre - (t.radius ?? 0.5));
+      const distance = t.distanceFrom ? t.distanceFrom(origin) : Math.max(0, centre - (t.radius ?? 0.5));
       if (distance > Math.max(w.fragmentRadius, w.radius * 6)) continue;
-      const los = lineOfSight(origin, tp, t.bodyHandle);
+      const los = lineOfSight(origin, tp, t.bodyHandle ?? ignoreHandle, ignoreHandle ?? t.bodyHandle);
       let { blast, fragments } = blastAt(distance, w);
       if (!los) { blast *= 0.4; fragments = 0; } // blast wraps around cover, fragments don't
       // HEAT jet: only a target right in front of the nose.
       const along = centre > 0 ? (dx * direction[0] + dy * direction[1] + dz * direction[2]) / centre : 1;
       const jet = w.shaped && distance <= JET_REACH_M && along > 0.7;
       if (blast <= 0 && fragments <= 0 && !jet) continue;
-      const dealt = t.applyDamage({
-        blast, fragments, jet, distance, lineOfSight: los,
-        penetrationMm: jet ? w.penetrationMm : 0, direction, position: origin,
-      }) ?? 0;
-      if (dealt > 0) {
-        if (blast > 0 || jet) emit({ type: 'hit', entityId: t.id, position: tp, damage: dealt, source: 'blast' });
-        else emit({ type: 'hit', entityId: t.id, position: tp, damage: dealt, source: 'fragments' });
+      const r = t.applyDamage({
+        blast, fragments, jet, distance, lineOfSight: los, shaped: !!w.shaped,
+        penetrationMm: w.penetrationMm ?? 0, direction, position: origin,
+      });
+      // A target returns either a damage number or { damage, source, weakSpot, after }.
+      const res = typeof r === 'number' ? { damage: r } : (r ?? { damage: 0 });
+      if (res.damage > 0) {
+        emit({
+          type: 'hit', entityId: t.id, position: tp, damage: res.damage,
+          source: res.source ?? (blast > 0 || jet ? 'blast' : 'fragments'),
+          ...(res.weakSpot ? { weakSpot: res.weakSpot } : {}),
+        });
       }
+      res.after?.();
     }
   }
 
@@ -275,6 +295,7 @@ export async function createSim({ level, settings = {} }) {
       if (state.drone.warhead.state === 'armed') detonate('manual');
       else if (!state.drone.destroyed && warhead.type !== 'none') safeWarnUntil = state.time + 2;
     }
+    if (c.resetTargets) { entities.reset(); emit({ type: 'targets_reset' }); }
     if (c.toggleMode) fm.mode = fm.mode === 'ACRO' ? 'ANGLE' : 'ACRO';
     if (c.reset) { respawn(); emit({ type: 'reset' }); }
     if (c.arm) {
@@ -285,6 +306,7 @@ export async function createSim({ level, settings = {} }) {
     }
   }
 
+  const entityDrone = { position: [0, 0, 0], speed: 0, active: false };
   const vBefore = new Vector3();
   const accel = new Vector3();
   const gq = new Quaternion();
@@ -292,6 +314,12 @@ export async function createSim({ level, settings = {} }) {
   function step(dt, controls) {
     handleEdges(controls);
     if (state.paused) return;
+
+    const dr = state.drone;
+    entityDrone.position = dr.position;
+    entityDrone.speed = Math.hypot(dr.velocity[0], dr.velocity[1], dr.velocity[2]);
+    entityDrone.active = !dr.destroyed && dr.armed;
+    entities.update(dt, entityDrone);
 
     if (state.drone.destroyed) {
       state.time += dt;
@@ -424,6 +452,7 @@ export async function createSim({ level, settings = {} }) {
     flightModel: fm,
     settings: opts,
     warhead,
+    entities,       // enemy manager (list, alive, reset)
     damage,         // DamageRegistry: register targets that blasts can hurt
     step,
     detonate: () => detonate('manual'),

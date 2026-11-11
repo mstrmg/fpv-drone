@@ -123,11 +123,28 @@ export function createTestLevel(seed = 7) {
     objects.push({ id: `t${id++}`, kind: 'tree', position: place(x, z), height: 6 + rand() * 10, radius: 2 + rand() * 2.5 });
   }
 
+  // Enemies (sim-only; visuals reads them from state.entities). Positions are [x, z].
+  const enemies = [];
+  const at = (kind, x, z, extra = {}) => enemies.push({ kind, position: [x, z], ...extra });
+  // Easy first targets, 80 m north of the spawn.
+  const loopA = [[-10, -80], [15, -95], [-5, -110]];
+  for (let i = 0; i < 3; i++) at('infantry', -10 + i * 3, -80 - i * 2, { patrol: loopA, yaw: 2.5, idleTime: 3 });
+  // Squad on patrol west of the tall buildings.
+  const loopB = [[-80, -105], [-58, -120], [-80, -135], [-100, -120]];
+  for (let i = 0; i < 4; i++) at('infantry', -80 - i * 2, -105 - i, { patrol: loopB, idleTime: 3 });
+  // Convoy driving a loop on the road to the north.
+  at('truck', -180, -190, { patrol: [[-180, -190], [40, -190], [40, -215], [-180, -215]], yaw: -Math.PI / 2 });
+  at('apc', -170, -240, { patrol: [[-170, -240], [30, -240], [30, -262], [-170, -262]], yaw: -Math.PI / 2 });
+  // Dug-in tank with infantry around it.
+  at('tank', 120, -90, { yaw: Math.PI / 2 });
+  for (let i = 0; i < 6; i++) at('infantry', 108 + (i % 3) * 3, -86 - Math.floor(i / 3) * 4 - 6, {});
+
   return {
     name: 'Test range',
     seed,
     terrain,
     objects,
+    enemies,
     spawn: { position: [0, terrain.heightAt(0, 0) + 0.1, 0], yaw: 0 },
   };
 }

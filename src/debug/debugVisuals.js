@@ -95,7 +95,7 @@ export function createDebugVisuals({ canvas, uiRoot, level }) {
   const mid = document.createElement('div'); mid.style.cssText = 'position:absolute;left:0;right:0;top:58%;text-align:center;font-size:22px;color:#ffd84a;';
   const help = document.createElement('div');
   help.style.cssText = 'position:absolute;left:50%;top:4%;transform:translateX(-50%);font:12px/1.4 monospace;color:#fff;opacity:.75;text-align:center;';
-  help.textContent = 'W/S throttle · A/D yaw · arrows pitch/roll (Shift = full rate) · Space arm · R reset · M acro/angle · F detonate · P pause';
+  help.textContent = 'W/S throttle · A/D yaw · arrows pitch/roll (Shift = full rate) · Space arm · R reset · M acro/angle · F detonate · T respawn enemies · P pause';
   const cross = document.createElement('div');
   cross.style.cssText = 'position:absolute;left:50%;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;border:2px solid rgba(255,255,255,.8);border-radius:50%;';
   osd.append(tl, tr, bl, br, mid, help, cross);
@@ -130,16 +130,16 @@ export function createDebugVisuals({ canvas, uiRoot, level }) {
       seen.add(e.id);
       let m = entityMeshes.get(e.id);
       if (!m) {
-        m = new THREE.Mesh(boxGeo, new THREE.MeshLambertMaterial({ color: entityColors[e.kind] ?? 0xff00ff }));
-        const s = entitySizes[e.kind] ?? [1, 1, 1];
-        m.scale.set(...s);
-        m.geometry = boxGeo.clone().translate(0, 0.5, 0);
+        m = new THREE.Mesh(boxGeo.clone().translate(0, 0.5, 0), new THREE.MeshLambertMaterial({ color: entityColors[e.kind] ?? 0xff00ff }));
+        m.scale.set(...e.size);
         entityMeshes.set(e.id, m);
         scene.add(m);
       }
       m.position.fromArray(e.position);
       m.quaternion.fromArray(e.quaternion);
-      m.material.color.setHex(e.status === 'destroyed' ? 0x1a1a1a : (entityColors[e.kind] ?? 0xff00ff));
+      const col = e.status === 'destroyed' ? (e.onFire ? 0xff5a10 : 0x1a1a1a) : e.status === 'prone' ? 0x9a9a55 : e.status === 'fleeing' ? 0xc0a040 : (entityColors[e.kind] ?? 0xff00ff);
+      m.material.color.setHex(col);
+      m.scale.y = e.status === 'prone' ? e.size[1] * 0.3 : e.status === 'destroyed' && e.kind === 'infantry' ? e.size[1] * 0.2 : e.size[1];
     }
     for (const [id, m] of entityMeshes) if (!seen.has(id)) { scene.remove(m); entityMeshes.delete(id); }
 

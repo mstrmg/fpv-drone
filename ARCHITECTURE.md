@@ -162,6 +162,7 @@ Every event has `{ type, time }` plus:
 | `drone_lost`       | `reason: 'detonated'`, `respawnIn` (s) | the drone is gone; `link.lost` is true (video feed is static) until the `reset` that follows |
 | `hit`              | `entityId, position, damage, source: 'blast' \| 'fragments' \| 'jet', weakSpot?: string` | a target took damage (`damage` = fraction of its full health) |
 | `entity_destroyed` | `entityId, kind, position, cause: 'blast' \| 'fragments' \| 'jet' \| 'cookoff'` | a target died; it stays in `state.entities` as a corpse / wreck |
+| `targets_reset`    | –            | all enemies respawned at their start (ids unchanged): clear wrecks, fires and corpses |
 | `entity_alerted`   | `entityId, position` | a unit noticed the drone (visuals may play a shout / turn head); optional to use |
 | `link_lost` / `link_restored` | – | M3 |
 
@@ -198,7 +199,7 @@ when `surface === 'ground'`, a scorch decal on buildings, fragment sparks out to
 ```js
 Controls = {
   throttle: 0..1, yaw: -1..1, pitch: -1..1, roll: -1..1, // pitch +1 = stick forward (nose down), roll +1 = right, yaw +1 = right
-  arm, reset, toggleMode, pause, fire,                      // edge-triggered booleans (true for one poll); fire = detonate
+  arm, reset, toggleMode, pause, fire, resetTargets,        // edge-triggered booleans (true for one poll); fire = detonate
 }
 ```
 

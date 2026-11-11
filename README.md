@@ -21,6 +21,7 @@ npm run test:sim   # headless flight-model checks (hover point, rates, crash, la
 | Reset after crash | R | Options or Triangle |
 | Acro / Angle mode | M | Square |
 | Detonate warhead | F | R2 or Cross |
+| Respawn all enemies | T | – |
 | Pause | P / Esc | Create |
 
 The drone flies in **acro (rate) mode** like a real FPV quad: the sticks set rotation

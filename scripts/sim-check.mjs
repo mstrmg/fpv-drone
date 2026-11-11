@@ -215,5 +215,58 @@ const collect = (sim, into) => { for (const e of sim.drainEvents()) into.push(e)
   check('open target at same range takes fragments', got.open && got.open.fragments > 0, got.open ? `frags ${got.open.fragments.toFixed(3)}` : 'not hit');
 }
 
+// ---------------- Enemies ----------------
+const kindOf = (sim, kind, n = 0) => sim.state.entities.filter((e) => e.kind === kind)[n];
+async function boom(warhead, target, offset) {
+  const { sim } = await fresh({ warhead, wind: false });
+  const e = kindOf(sim, target);
+  const [fx, fz] = [-Math.sin(Math.atan2(-e.velocity[0] || 0, 0)), 0]; void fx; void fz;
+  sim._body.setTranslation({ x: e.position[0] + offset[0], y: e.position[1] + offset[1], z: e.position[2] + offset[2] }, true);
+  sim.state.drone.warhead.state = 'armed';
+  sim.detonate();
+  const ev = sim.drainEvents();
+  return { sim, e, ev };
+}
+
+// 14. Truck dies to a HEAT hit; frag kills infantry but barely scratches a tank
+{
+  const r = await boom('rpg-heat', 'truck', [0, 3.2, 0]);
+  check('HEAT top hit destroys truck', r.e.status === 'destroyed' && r.e.onFire && r.ev.some((x) => x.type === 'entity_destroyed' && x.cause === 'jet'), `health ${r.e.health.toFixed(2)}`);
+  const f = await boom('frag', 'infantry', [0, 1, 1.5]);
+  check('frag kills nearby infantry', f.e.status === 'destroyed', `health ${f.e.health.toFixed(2)}`);
+  const t = await boom('frag', 'tank', [0, 3, 0]);
+  check('frag barely hurts a tank', t.e.status !== 'destroyed' && t.e.health > 0.8, `health ${t.e.health.toFixed(2)}`);
+}
+
+// 15. Tank armour: front hit survives, top hit on the ammo kills and cooks off
+{
+  const front = await boom('rpg-heat', 'tank', [-3.9, 1.2, 0]);
+  const hit = front.ev.find((x) => x.type === 'hit' && x.entityId === front.e.id);
+  check('tank survives a frontal HEAT hit', front.e.status !== 'destroyed' && front.e.health > 0.3 && front.e.health < 0.8 && hit?.source === 'jet', `health ${front.e.health.toFixed(2)}`);
+  const { sim, e } = await boom('rpg-heat', 'tank', [0, 2.7, 0]);
+  const ev = [];
+  run(sim, blank(), 6, () => collect(sim, ev));
+  const cook = ev.find((x) => x.type === 'explosion' && x.cause === 'cookoff');
+  const infantryHurt = sim.state.entities.filter((x) => x.kind === 'infantry' && x.health < 1).length;
+  check('tank top hit kills it', e.status === 'destroyed', `health ${e.health.toFixed(2)}`);
+  check('ammo cook-off hurts nearby troops', !!cook && cook.kind === 'ammo' && infantryHurt >= 2, `${cook ? cook.kind : 'no cook-off'}, ${infantryHurt} infantry hurt`);
+}
+
+// 16. Patrol, notice the drone, flee or hit the dirt
+{
+  const { sim, c } = await fresh({ warhead: 'rpg-heat' });
+  const t0 = kindOf(sim, 'truck').position.slice();
+  run(sim, c, 15);
+  const t1 = kindOf(sim, 'truck').position;
+  check('truck patrols', Math.hypot(t1[0] - t0[0], t1[2] - t0[2]) > 15, `${Math.hypot(t1[0] - t0[0], t1[2] - t0[2]).toFixed(0)} m in 15 s`);
+  const squad = sim.state.entities.filter((e) => e.kind === 'infantry').slice(7);
+  sim._body.setTranslation({ x: squad[0].position[0] + 12, y: squad[0].position[1] + 10, z: squad[0].position[2] + 12 }, true);
+  sim._body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+  c.throttle = globalThis.hoverLoaded; const ev = [];
+  run(sim, c, 4, () => collect(sim, ev));
+  const reacting = squad.filter((e) => e.status === 'fleeing' || e.status === 'prone').length;
+  check('infantry notice the drone and react', reacting >= 3 && ev.some((x) => x.type === 'entity_alerted'), `${reacting}/${squad.length} fleeing or prone`);
+}
+
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed');
 process.exit(failures ? 1 : 0);
