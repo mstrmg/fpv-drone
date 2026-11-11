@@ -107,7 +107,13 @@ throw their helmet or rifle at it (`entity_throw`) and now and then fire a burst
 Hitboxes: vehicles are compound boxes per variant (HIT_SHAPES: hull, turret, gun...); infantry boxes follow posture
 (standing, lying, seated).
 Level enemy defs may carry `speed` (m/s along the patrol), `route: true` (one way: past the last point the unit has
-escaped, status `'escaped'`, and the visuals hide it) and `waitFor: <mission id>` (parked until that mission starts).
+escaped, status `'escaped'`, and the visuals hide it) and `waitFor: <mission id>` (parked until that mission starts;
+`'alert'`: until it hears the drone, then 4 s to start up and it drives off).
+Campaign props: `camoNets: [{x, z, yaw, w, d, h}]` (net over a vehicle), `mortars: [{x, z, yaw}]` (tube + pit),
+`friendlies: [{x, z, yaw}]` (our men in a trench; `state.mission.casualties` of them are down).
+Missions may set `rough` (only a rough fix until the drone is close), `mortar` (shells our line: `mortar_fire` at the tube,
+then an `explosion` of kind `'mortar'` where it lands) and `pinned` (their MG fires `entity_shot` at our men; one is
+hit every so often, `friendly_hit`; all of them = failed).
 Missions end when every target is dealt with or escaped; `outroPartial` / `outroFailed` play when some / all got away,
 and the `mission` event (phase `'complete'`, or `'failed'` when any got away) carries `done, escaped`. A failed mission
 restarts: its targets are put back (`entities.resetUnits`) and its `retry` lines play instead of the intro.
@@ -287,6 +293,8 @@ Every event has `{ type, time }` plus:
 | `link_lost` / `link_restored` | – | signal fell below 0.08 / recovered (not sent for the detonation cut, see `drone_lost`) |
 | `mission`          | `id, phase: 'intro' \| 'active' \| 'complete', title` | campaign mission started / objective live / all targets dealt with |
 | `mission_line`     | `speaker, text, lineId, radio?` | the other soldier says something (`radio`: a bearing call while you fly) |
+| `mortar_fire`      | `position` | a mortar tube fires (flash and smoke at the muzzle) |
+| `friendly_hit`     | `index, casualties, count` | one of our pinned men was hit |
 | `entity_shot`      | `entityId, from:[x,y,z], to:[x,y,z], hit` | a panicked soldier fires a round at the drone (muzzle flash + tracer) |
 | `entity_throw`     | `entityId, item: 'helmet' \| 'rifle', position, velocity` | he throws it at the drone: it flies ballistically from there |
 | `mode`             | `mode: 'foot' \| 'drone'` | goggles on / off (campaign). After a detonation the next drone is put by the mast and you are back on foot |

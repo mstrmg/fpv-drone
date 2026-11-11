@@ -154,6 +154,11 @@ export function createVisuals({ canvas, uiRoot, level }) {
         helpFade = setTimeout(() => { help.style.opacity = '0'; }, 9000);
       } else if (ev.type === 'armed') {
         glitch = Math.max(glitch, 0.15);
+      } else if (ev.type === 'mortar_fire') {
+        // The tube fires: a short flash and a puff of smoke from the muzzle.
+        const p = ev.position;
+        fire.spawn({ pos: [p[0], p[1] + 0.6, p[2]], vel: [0, 0, 0], size: 2.2, grow: 0.6, life: 0.09, color: [3, 2.4, 1.5], alpha: 1, fadeIn: 100, drag: 0 });
+        for (let i = 0; i < 6; i++) particles.dust([p[0], p[1] + 0.7, p[2]], { count: 1, speed: 1.2, size: 1.0, life: 3.5, up: 1.2, alpha: 0.3 });
       } else if (ev.type === 'drone_hit') {
         // A round or a thrown helmet clipped the frame: a jolt and a burst of static.
         glitch = Math.max(glitch, ev.cause === 'bullet' ? 0.7 : 0.45);
@@ -257,6 +262,7 @@ export function createVisuals({ canvas, uiRoot, level }) {
     fire.update(state.paused ? 0 : dt);
     explosions.update(state.paused ? 0 : dt);
     entities.update(state, events, state.paused ? 0 : dt);
+    forts.casualties?.(state.mission?.casualties ?? 0);
     forts.update(state.paused ? 0 : dt, camera.position);
     prompt.style.display = foot && state.prompt === 'goggles' && !state.paused && !debug.freeCam && !briefing ? 'block' : 'none';
     dot.style.display = foot && !debug.freeCam && !briefing ? 'block' : 'none';

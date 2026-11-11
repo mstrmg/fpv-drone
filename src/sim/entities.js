@@ -285,7 +285,7 @@ export function createEntities(ctx) {
       patrol: def.patrol ?? null, idleTime: def.idleTime ?? (type.vehicle ? 2 : 4),
       cruise: def.speed ?? null,      // m/s along the patrol, instead of the type's walk speed
       route: !!def.route,             // one way: at the last point it has got away (escaped)
-      waitFor: def.waitFor ?? null,   // parked until that mission starts (missions.js sets go)
+      waitFor: def.waitFor ?? null,   // parked until that mission starts (missions.js sets go); 'alert': until it hears the drone
       go: false, escaped: false,
       x: 0, z: 0, y: 0, yaw: 0, speed: 0, pitch: 0, roll: 0, mult: 1,
       health: 1, status: 'idle', destroyed: false, onFire: false, fireUntil: 0,
@@ -379,7 +379,7 @@ export function createEntities(ctx) {
     e.wp = 0; e.waitUntil = time + rand() * 3;
     e.alerted = false; e.noticeT = 0; e.calmT = 0; e.mode = 'patrol'; e.proneUntil = 0;
     e.reactAfter = 0.6 + rand() * 1.0;
-    e.go = false; e.escaped = false;
+    e.go = false; e.escaped = false; e.goAt = 0;
     e.ride = e.rideSpawn ?? null;
     if (!e.def.vehicle) { e.armed = e.def.variant !== 'officer'; e.helmet = true; e.act = null; e.actUntil = 0; }
     if (e.s) e.s.riding = e.ride ? e.ride.veh.id : null;
@@ -578,6 +578,11 @@ export function createEntities(ctx) {
 
   function patrol(e, dt, push = 1) {
     const def = e.def;
+    if (e.waitFor === 'alert' && (e.alerted || e.goAt) && !e.go) {
+      // Heard it: a few seconds to start the engine, then off down its way out.
+      if (!e.goAt) e.goAt = time + 4;
+      if (time >= e.goAt) e.go = true;
+    }
     if (e.escaped || (e.waitFor && !e.go)) { steer(e, dt, e.yaw, 0); return; }
     if (!e.patrol || e.patrol.length < 2 || time < e.waitUntil) { steer(e, dt, e.yaw, 0); return; }
     const [tx, tz] = e.patrol[e.wp];

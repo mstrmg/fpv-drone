@@ -318,6 +318,36 @@ export function createCampaignLevel() {
     m.enemy(kind, variant, x, z, { patrol: [[x, z], ...SUPPLY], speed: 3.9, route: true, waitFor: 'supply', mission: 'supply', yaw: Math.PI, ...extra });
   });
 
+  // ---- Mission 4: a tank in a hide by a wrecked house, behind their second line -------------------
+  // Under camo netting with the engine off. If it hears the drone it starts up and drives off north.
+  const TX = -815, TZ = -468;
+  m.building(TX - 12, TZ + 6, 9, 3.8, 7, 0.25);
+  m.building(TX - 30, TZ - 14, 4, 2.4, 3.5, 0.1);
+  m.treeLine([TX + 14, TZ - 30], [TX + 30, TZ + 40], 7);
+  props.camoNets.push({ x: TX, z: TZ, yaw: 0.35, w: 4.6, d: 8.6, h: 2.7 });
+  m.enemy('tank', 't72', TX, TZ, { yaw: 0.35, patrol: [[TX, TZ], [TX - 30, TZ - 140], [-800, -760], [-740, -940], [-700, -1120]],
+    speed: 7, route: true, waitFor: 'alert', mission: 'hide' });
+  m.enemy('infantry', 'crew', TX - 6, TZ + 9, { yaw: 2.4, hold: true, idleTime: 8 });
+
+  // ---- Mission 5: a mortar team behind their first line, shelling our forward trench ----------------
+  const MX = -380, MZ2 = -215;
+  props.mortars.push({ x: MX, z: MZ2, yaw: Math.PI + 0.15 });
+  m.sandbags(MX, MZ2, 0, 2.4, 1.2);
+  m.treeLine([MX - 70, MZ2 + 24], [MX + 70, MZ2 + 20], 6, [[MX - 10, MZ2 + 22, 5]]); // hides the tube from our side
+  [['rifleman', 1.2, 1.4], ['rifleman', -1.4, 1.0], ['officer', 2.5, -2.2]].forEach(([v, dx, dz]) =>
+    m.enemy('infantry', v, MX + dx, MZ2 + dz, { yaw: Math.PI + 0.15, hold: true, mission: 'mortar', patrol: [[MX + dx, MZ2 + dz], [MX + dx * 1.6, MZ2 + dz + 1.5]], idleTime: 9 }));
+  m.bales(MX + 30, MZ2 - 20, 3);
+
+  // ---- Mission 6: an MG nest has our outpost trench pinned in the grey zone -------------------------
+  const PX = -560, PZ = 400, NX = -585, NZ = 252;
+  trench([[PX - 22, PZ + 2], [PX, PZ], [PX + 22, PZ + 3]], { zig: 1.5, bay: 7 });
+  for (const dx of [-14, -6, 2, 9, 16]) props.friendlies.push({ x: PX + dx, z: PZ + (dx % 2 ? 0.4 : -0.3), yaw: 0.05 * dx });
+  m.sandbags(NX, NZ, 0, 2.0, 1.5);
+  m.sandbags(NX, NZ, 0, 2.5, 1.2);
+  m.enemy('infantry', 'mg', NX, NZ + 0.8, { yaw: Math.PI, hold: true, mission: 'nest', patrol: [[NX, NZ + 0.8], [NX + 1.2, NZ + 0.4]], idleTime: 14 });
+  m.enemy('infantry', 'rifleman', NX - 1.6, NZ - 0.5, { yaw: Math.PI + 0.4, hold: true, mission: 'nest', patrol: [[NX - 1.6, NZ - 0.5], [NX - 3, NZ - 2]], idleTime: 10 });
+  m.treeLine([NX - 40, NZ - 18], [NX + 50, NZ - 24], 9, [[NX, NZ - 20, 8]]);
+
   // ---- Missions ---------------------------------------------------------------------------------
 
   const missions = [{
@@ -390,6 +420,68 @@ export function createCampaignLevel() {
       { after: 5, say: 'Another column. Same road, bearing {brg}, {rng} metres.', dur: 4,
         shot: { look: 'targets', range: 450, height: 180, bearing: 2.6, fov: 13, drift: 0.004 } },
       { say: 'Stop this one.', dur: 2.2 },
+    ],
+  }, {
+    id: 'hide',
+    title: 'Tank in a hide',
+    objective: 'Knock out the tank hiding under the net by the wrecked house',
+    intro: [
+      { after: 6, say: 'Come look. See the net by that wrecked house?', dur: 4,
+        shot: { look: 'targets', range: 380, height: 150, bearing: 3.4, fov: 7, drift: 0.003 } },
+      { say: 'That\'s a tank under there. T-72. Bearing {brg}, {rng} metres.', dur: 5,
+        shot: { look: 'targets', range: 200, height: 80, bearing: 3.7, fov: 8, drift: 0.004 } },
+      { say: 'Engine\'s off. If it hears you it\'ll start up and run, so come in quiet and low.', dur: 6,
+        shot: { look: 'targets', range: 120, height: 45, bearing: 3.1, fov: 10, drift: 0.005 } },
+      { say: 'Front armour won\'t care about you. Go for the engine deck, or the hatches.', dur: 5 },
+    ],
+    outro: [
+      { after: 1.5, say: 'It\'s done. Nobody\'s driving that one again.', dur: 3.8 },
+    ],
+    outroFailed: [
+      { after: 1.5, say: 'It got away. Too loud, they heard you coming.', dur: 4 },
+    ],
+    retry: [
+      { after: 5, say: 'Another one just pulled into the same hide. Bearing {brg}.', dur: 4,
+        shot: { look: 'targets', range: 300, height: 110, bearing: 3.4, fov: 8, drift: 0.004 } },
+      { say: 'Quiet this time.', dur: 2 },
+    ],
+  }, {
+    id: 'mortar',
+    title: 'Mortar team',
+    objective: 'Find and take out the mortar team shelling our forward trench',
+    rough: { off: [120, -80], within: 140 },
+    mortar: { pos: [MX, MZ2], impact: [-430, 560], spread: 45, every: 11, flight: 17 },
+    intro: [
+      { after: 4, say: 'Hear that? Mortar. They\'re walking rounds onto our forward trench.', dur: 5 },
+      { say: 'I can\'t see the tube. Somewhere behind their first line, roughly bearing {brg}, about {rng}.', dur: 6,
+        shot: { look: 'targets', range: 700, height: 260, bearing: 0.2, fov: 16, drift: 0.003 } },
+      { say: 'Watch for the flash when it fires. Get over there and I\'ll pick them out on your feed.', dur: 5.5 },
+    ],
+    outro: [
+      { after: 1.5, say: 'Mortar\'s quiet. The guys up front say thanks.', dur: 4 },
+    ],
+  }, {
+    id: 'nest',
+    title: 'Pinned down',
+    objective: 'Take out the machine gun nest before it kills our men in the outpost trench',
+    pinned: { count: 5, every: 32, at: [PX, PZ], spread: 20 },
+    intro: [
+      { after: 4, say: 'Shit. Our outpost in the grey zone is pinned. Five guys in that trench.', dur: 5,
+        shot: { look: [PX, H(PX, PZ), PZ], range: 260, height: 120, bearing: 0.3, fov: 12, drift: 0.004 } },
+      { say: 'MG nest in the sandbags north of them. Bearing {brg}, {rng} metres from us.', dur: 5.5,
+        shot: { look: 'targets', range: 180, height: 70, bearing: 3.5, fov: 10, drift: 0.004 } },
+      { say: 'They can\'t lift their heads. Go, now. Every minute we lose someone.', dur: 4.5 },
+    ],
+    outro: [
+      { after: 1.5, say: 'Gun\'s down! They\'re pulling back. You saved them.', dur: 4 },
+    ],
+    outroFailed: [
+      { after: 1.5, say: 'That\'s all of them. We lost the outpost.', dur: 4 },
+    ],
+    retry: [
+      { after: 5, say: 'New team moved into the outpost, and the gun opened up on them too.', dur: 5,
+        shot: { look: 'targets', range: 220, height: 90, bearing: 3.4, fov: 11, drift: 0.004 } },
+      { say: 'Get it this time.', dur: 2 },
     ],
   }];
 

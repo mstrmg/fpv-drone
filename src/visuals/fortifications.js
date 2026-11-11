@@ -8,7 +8,7 @@ import { mulberry32 } from './rng.js';
 import { canvasTexture, makePlankTexture, makeBarkTextures } from './textures.js';
 import { DUGOUT_WALL, DUGOUT_DOOR, DUGOUT_MOUND, dugoutRampRect } from '../sim/propColliders.js';
 import { createSoldierFactory } from './soldierModel.js';
-import { initSoldierAnim, animateCrew } from './soldierAnim.js';
+import { initSoldierAnim, animateCrew, animateSoldier, killSoldierAnim, animateDeadSoldier } from './soldierAnim.js';
 import { createDrone } from './drone.js';
 
 const BANK = 1.5;        // how far an earth bank runs out beyond a dugout wall
@@ -129,11 +129,12 @@ function drawTvOverlay(g, W, H, info) {
 export function createFortifications({ scene, level }) {
   const pr = level.props ?? {};
   const trenches = pr.trenches ?? [], dugouts = pr.dugouts ?? [], masts = pr.masts ?? [];
+  const camoNets = pr.camoNets ?? [], mortars = pr.mortars ?? [], friendlies = pr.friendlies ?? [];
   const group = new THREE.Group();
   scene.add(group);
   const disposables = [];
   const keep = (x) => { disposables.push(x); return x; };
-  if (!trenches.length && !dugouts.length && !masts.length) {
+  if (!trenches.length && !dugouts.length && !masts.length && !camoNets.length && !mortars.length && !friendlies.length) {
     return { update() {}, dispose() { scene.remove(group); } };
   }
   const H = (x, z) => level.terrain.heightAt(x, z);
@@ -400,6 +401,33 @@ export function createFortifications({ scene, level }) {
     return g;
   }
 
+  // Camo nets thrown over a vehicle: a flat top on poles, draped down to the ground all round, lumpy.
+  function camoNetGeo(n) {
+    const SPREAD = 2.6, W = n.w + SPREAD * 2, D = n.d + SPREAD * 2, N = 30;
+    const g = new THREE.PlaneGeometry(W, D, N, N).rotateX(-Math.PI / 2);
+    const pos = g.attributes.position, uv = g.attributes.uv;
+    const r = mulberry32(Math.round(n.x * 13 + n.z * 7));
+    const lumps = Array.from({ length: 7 }, () => [(r() - 0.5) * W * 0.8, (r() - 0.5) * D * 0.8, (r() - 0.5) * 0.35]);
+    const c = Math.cos(n.yaw), s = Math.sin(n.yaw);
+    const base = H(n.x, n.z);
+    for (let i = 0; i < pos.count; i++) {
+      const lx = pos.getX(i), lz = pos.getZ(i);
+      const out = Math.hypot(Math.max(0, Math.abs(lx) - n.w / 2), Math.max(0, Math.abs(lz) - n.d / 2));
+      const k = Math.min(1, out / SPREAD);
+      let y = n.h * (1 - k * k * (3 - 2 * k));
+      // Sags between the poles at the corners and centre.
+      y -= 0.25 * (1 - k) * Math.abs(Math.sin(lx / n.w * Math.PI)) * Math.abs(Math.sin(lz / n.d * Math.PI * 2));
+      for (const [bx, bz, a] of lumps) y += a * Math.exp(-((lx - bx) ** 2 + (lz - bz) ** 2) / 2.5);
+      const wx = n.x + lx * c + lz * s, wz = n.z - lx * s + lz * c;
+      pos.setY(i, Math.max(base + y, H(wx, wz) + 0.04));
+      pos.setX(i, wx); pos.setZ(i, wz);
+      uv.setXY(i, lx / 2.2, lz / 2.2);
+    }
+    g.computeVertexNormals();
+    return g;
+  }
+  for (const n of camoNets) nets[0].push(camoNetGeo(n));
+
   if (earthGeos.length) {
     const merged = keep(mergeGeometries(earthGeos));
     earthGeos.forEach((g) => g.dispose());
@@ -620,6 +648,59 @@ export function createFortifications({ scene, level }) {
     buddy.bones.chest.add(tab);
   }
 
+  // ---- Mortar pits: an 82 mm tube on its baseplate and bipod, ammo boxes, spent cases --------------
+  for (const mo of mortars) {
+    const g = new THREE.Group();
+    g.position.set(mo.x, H(mo.x, mo.z), mo.z);
+    g.rotation.y = mo.yaw;
+    group.add(g);
+    const mk = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => {
+      const m = new THREE.Mesh(keep(geo), mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz);
+      m.castShadow = m.receiveShadow = true; g.add(m); return m;
+    };
+    mk(new THREE.CylinderGeometry(0.32, 0.36, 0.06, 14), steel, 0, 0.03, 0.35);                       // baseplate
+    const EL = 0.95;                                                                                   // ~55° up, firing along −Z
+    const tube = mk(new THREE.CylinderGeometry(0.045, 0.05, 1.22, 12), black, 0, 0.55, -0.0, -EL);
+    tube.position.set(0, 0.03 + Math.cos(EL) * 0.61, 0.35 - Math.sin(EL) * 0.61);
+    for (const sx of [-1, 1]) {
+      const leg = mk(new THREE.CylinderGeometry(0.016, 0.016, 0.85, 6), steel, sx * 0.22, 0.38, -0.32, 0.15, 0, sx * 0.3);
+      void leg;
+    }
+    mk(new THREE.BoxGeometry(0.08, 0.1, 0.12), black, 0, 0.72, -0.28);                                  // sight / traverse
+    const box = keep(new THREE.MeshStandardMaterial({ color: 0x4d5435, roughness: 0.85 }));
+    for (const [x, z, ry] of [[1.1, 0.9, 0.2], [1.3, 1.25, -0.1], [-1.2, 1.1, 0.4]]) mk(new THREE.BoxGeometry(0.55, 0.18, 0.3), box, x, 0.09, z, 0, ry);
+    const brass = keep(new THREE.MeshStandardMaterial({ color: 0x9a7f3a, roughness: 0.4, metalness: 0.7 }));
+    for (let k = 0; k < 6; k++) mk(new THREE.CylinderGeometry(0.03, 0.03, 0.12, 6), brass, -0.6 + k * 0.17, 0.03, 1.6 + (k % 2) * 0.2, 0, 0, Math.PI / 2);
+  }
+
+  // ---- Our men in the outpost trench (mission 6): kneeling behind the parapet, firing back --------
+  const pinned = [];
+  if (friendlies.length) {
+    soldiers ??= createSoldierFactory();
+    friendlies.forEach((f, i) => {
+      const s = soldiers.make(i % 3 === 2 ? 'mg' : 'rifleman', 777 + i * 31, { friendly: true });
+      initSoldierAnim(s);
+      s.st.kneel = true;
+      s.root.position.set(f.x, H(f.x, f.z), f.z);
+      s.root.rotation.y = f.yaw;
+      group.add(s.root);
+      pinned.push({ s, dead: false, f });
+    });
+  }
+  let lost = 0;
+  function setCasualties(n) {
+    if (n === lost) return;
+    if (n < lost) {
+      // A fresh team: everyone back up.
+      for (const p of pinned) if (p.dead) { initSoldierAnim(p.s); p.s.st.kneel = true; p.dead = false; p.s.root.position.y = H(p.f.x, p.f.z); }
+    }
+    lost = n;
+    for (let i = 0; i < pinned.length; i++) {
+      const p = pinned[(i * 2 + 1) % pinned.length]; // not left to right
+      if (i < n && !p.dead) { p.dead = true; killSoldierAnim(p.s, null); }
+    }
+  }
+
   // ---- Logs mesh ------------------------------------------------------------------------------
   if (logs.length) {
     const geo = keep(new THREE.CylinderGeometry(1, 1, 1, 9, 1).rotateZ(Math.PI / 2));
@@ -640,6 +721,7 @@ export function createFortifications({ scene, level }) {
       visible(on) { for (const o of tvParts) o.visible = on; },
       info(text) { if (text !== tvText) { tvText = text; tvInfo.draw(text); } },
     } : null,
+    casualties: setCasualties,  // how many of our men in the outpost trench have been hit
     update(dt, camPos) {
       t += dt;
       if (buddy) {
@@ -648,6 +730,12 @@ export function createFortifications({ scene, level }) {
         if (near) animateCrew(buddy, { dt, mode: 'gunner', alert: false, seated: true });
       }
       if (lamp) lamp.intensity = 2.2 * (0.96 + 0.04 * Math.sin(t * 13) * Math.sin(t * 3.1));
+      if (pinned.length && dt > 0 && camPos.distanceToSquared(pinned[0].s.root.position) < 700 * 700) {
+        for (const p of pinned) {
+          if (p.dead) animateDeadSoldier(p.s, dt);
+          else animateSoldier(p.s, { dt, speed: 0, status: 'idle', drone: null, alert: 1 });
+        }
+      }
     },
     dispose() {
       scene.remove(group);

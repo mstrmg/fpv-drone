@@ -8,6 +8,11 @@
 //   outro: [{ say, after?, dur? }],           // all targets dealt with
 //   outroPartial?, outroFailed?,               // some / all of them got away (enemy defs with `route: true`)
 //   retry?: [...],                             // after a failure: the targets are put back and this plays instead of the intro
+//   rough?: { off: [dx, dz], within },         // he only has a rough fix: everything aims `off` from the real spot
+//                                              // until your drone gets `within` m of them, then he calls them properly
+//   mortar?: { pos: [x, z], impact: [x, z], spread, every, flight }  // the targets lob shells at `impact` while they can
+//   pinned?: { count, every, at: [x, z], spread }  // their MG has `count` of ours pinned at `at`; one is hit every
+//                                              // `every` s while it fires (state.mission.casualties); all hit = failed
 // }]
 // Targets with `waitFor: <id>` sit still until that mission starts. A target on a `route` that reaches
 // its last point has escaped: the mission ends once every target is dealt with or gone (no timer shown).
@@ -26,7 +31,7 @@ export function createMissions({ level, entities, state, emit }) {
   const list = level.missions ?? [];
   const m = {
     id: null, title: null, objective: null, phase: 'none',   // 'intro' | 'active' | 'outro' | 'done' | 'none'
-    done: 0, total: 0, escaped: 0,
+    done: 0, total: 0, escaped: 0, casualties: 0, rough: false,
     speaker: SPEAKER, line: null, lineId: 0,                 // the subtitle on screen now; lineId changes per line
     cutscene: null,                                          // spotter camera { position, target, fovDeg } while briefing
     spotter: { position: [0, 0, 0], target: [0, 0, 0], fovDeg: 10 }, // what his drone sees all the time (the TV in the dugout)
@@ -47,7 +52,8 @@ export function createMissions({ level, entities, state, emit }) {
     if (!def) { m.phase = 'done'; m.line = null; m.cutscene = null; return; }
     m.id = def.id; m.title = def.title; m.objective = def.objective;
     targets = entities.list.filter((e) => e.tag === def.id);
-    m.total = targets.length; m.done = 0; m.escaped = 0;
+    m.total = targets.length; m.done = 0; m.escaped = 0; m.casualties = 0;
+    m.rough = !!def.rough; fireT = 4; impacts.length = 0; burstLeft = 0; burstT = 3; hitT = 0;
     for (const e of targets) if (e.waitFor === def.id) e.go = true;
     m.phase = 'intro';
     run((retry ? def.retry : null) ?? def.intro ?? []);
@@ -77,6 +83,8 @@ export function createMissions({ level, entities, state, emit }) {
     for (const e of pool) { centre[0] += e.x; centre[1] += e.y; centre[2] += e.z; }
     const n = Math.max(1, pool.length);
     centre[0] /= n; centre[1] /= n; centre[2] /= n;
+    const r = list[index]?.rough;
+    if (r && m.rough) { centre[0] += r.off[0]; centre[2] += r.off[1]; centre[1] = level.terrain.heightAt(centre[0], centre[2]); }
     return centre;
   }
 
@@ -147,10 +155,30 @@ export function createMissions({ level, entities, state, emit }) {
 
   // On the radio while you fly: where they are from you. More often when they are moving.
   let callT = 0, callEnds = 0, called = 0;
+  function radio(text) {
+    callT = 0;
+    m.line = text; m.lineId++;
+    callEnds = Math.max(2.8, text.length * 0.065);
+    emit({ type: 'mission_line', speaker: SPEAKER, text, lineId: m.lineId, radio: true });
+  }
   function callouts(dt) {
     if (m.phase !== 'active') { callT = 0; called = 0; return; }
     callT += dt;
     if (m.line && callT >= callEnds) m.line = null;
+    const def = list[index];
+    if (m.rough) {
+      // No fix yet: he finds them once your camera is close enough for him to pick them out.
+      const d = state.drone;
+      const live = targets.filter((e) => !dealtWith(e));
+      const near = state.mode !== 'foot' && d && !d.destroyed && live.some((e) => Math.hypot(e.x - d.position[0], e.z - d.position[2]) < (def.rough.within ?? 150));
+      if (near) {
+        m.rough = false; track();
+        const f = m.bearing?.fromDrone;
+        radio(f ? `There! I see them on your feed. Bearing ${brg(f.deg)}, ${roundRange(f.m)} metres.` : 'There! I see them on your feed.');
+        called = 1;
+      }
+      return;
+    }
     const b = m.bearing?.fromDrone;
     if (!b || m.line) return;
     const every = called === 0 ? 5 : m.bearing.moving ? 14 : 22;
@@ -163,10 +191,59 @@ export function createMissions({ level, entities, state, emit }) {
         ? [`They're bearing ${deg} from you, ${r} metres, heading ${mv}.`, `${deg}, ${r} out. Still going ${mv}.`]
         : [`They're bearing ${deg} from you, ${r} metres.`, `From you: ${deg}, about ${r}.`];
     const text = lines[called % lines.length];
-    called++; callT = 0;
-    m.line = text; m.lineId++;
-    callEnds = Math.max(2.8, text.length * 0.065);
-    emit({ type: 'mission_line', speaker: SPEAKER, text, lineId: m.lineId, radio: true });
+    called++;
+    radio(text);
+  }
+
+  // ---- What the targets do to us while the mission runs -----------------------------------------
+  // A target that can still work its weapon: alive, unhurt, and not ducking from the drone.
+  const working = (e) => !dealtWith(e) && !e.escaped && e.cond === 'ok' && e.mode !== 'panic';
+  const R = (a, b) => a + Math.random() * (b - a);
+  let fireT = 4, burstLeft = 0, burstT = 3, hitT = 0;
+  const impacts = [];
+  function fire(dt) {
+    const def = list[index];
+    if (!def || (m.phase !== 'intro' && m.phase !== 'active')) { impacts.length = 0; return; }
+    // Mortar: a thump and a flash at the tube, the shell lands near our line a while later.
+    const mo = def.mortar;
+    if (mo) {
+      fireT -= dt;
+      if (fireT <= 0 && targets.some(working)) {
+        fireT = mo.every * R(0.7, 1.3);
+        emit({ type: 'mortar_fire', position: [mo.pos[0], level.terrain.heightAt(mo.pos[0], mo.pos[1]) + 0.9, mo.pos[1]] });
+        const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * mo.spread;
+        impacts.push({ t: mo.flight, x: mo.impact[0] + Math.cos(a) * r, z: mo.impact[1] + Math.sin(a) * r });
+      }
+      for (let i = impacts.length - 1; i >= 0; i--) {
+        const s = impacts[i];
+        if ((s.t -= dt) > 0) continue;
+        impacts.splice(i, 1);
+        emit({ type: 'explosion', kind: 'mortar', position: [s.x, level.terrain.heightAt(s.x, s.z), s.z], radius: 9, chargeKg: 1.2 });
+      }
+    }
+    // Machine gun on our pinned men: bursts of tracer, and now and then one of them is hit.
+    const pn = def.pinned;
+    if (pn && m.phase === 'active') {
+      const gun = targets.find((e) => e.def.variant === 'mg' && working(e)) ?? targets.find(working);
+      if (!gun) return;
+      burstT -= dt;
+      if (burstT <= 0) {
+        if (burstLeft <= 0) burstLeft = Math.floor(R(5, 11));
+        burstLeft--;
+        burstT = burstLeft > 0 ? R(0.08, 0.13) : R(2, 5);
+        const a = Math.random() * Math.PI * 2, r = Math.random() * pn.spread;
+        const tx = pn.at[0] + Math.cos(a) * r, tz = pn.at[1] + Math.sin(a) * r;
+        emit({ type: 'entity_shot', entityId: gun.id, from: [gun.x, gun.y + 0.9, gun.z], to: [tx, level.terrain.heightAt(tx, tz) + R(0.3, 1.6), tz], hit: false });
+      }
+      hitT += dt;
+      if (hitT >= pn.every) {
+        hitT = 0;
+        m.casualties++;
+        emit({ type: 'friendly_hit', index: m.casualties - 1, casualties: m.casualties, count: pn.count });
+        const left = pn.count - m.casualties;
+        if (left > 0) radio(left === 1 ? 'Another one down! Only one left in that trench!' : `They hit another one! ${left} left. Hurry!`);
+      }
+    }
   }
 
   function dealtWith(e) {
@@ -181,12 +258,13 @@ export function createMissions({ level, entities, state, emit }) {
     if (m.phase === 'active') {
       m.done = targets.filter(dealtWith).length;
       m.escaped = targets.filter((e) => e.escaped && !dealtWith(e)).length;
-      if (m.done + m.escaped >= m.total) {
+      const def = list[index];
+      const lost = !!def.pinned && m.casualties >= def.pinned.count;
+      if (m.done + m.escaped >= m.total || lost) {
         m.phase = 'outro';
-        const def = list[index];
-        failed = m.escaped > 0;
+        failed = m.escaped > 0 || lost;
         emit({ type: 'mission', id: m.id, phase: failed ? 'failed' : 'complete', title: m.title, done: m.done, escaped: m.escaped });
-        run((m.escaped === 0 ? def.outro : m.done === 0 ? def.outroFailed ?? def.outroPartial : def.outroPartial) ?? def.outro ?? []);
+        run((lost ? def.outroFailed : m.escaped === 0 ? def.outro : m.done === 0 ? def.outroFailed ?? def.outroPartial : def.outroPartial) ?? def.outro ?? []);
       }
     }
     if (m.phase === 'intro' || m.phase === 'outro') {
@@ -203,6 +281,7 @@ export function createMissions({ level, entities, state, emit }) {
     }
     track();
     callouts(dt);
+    fire(dt);
     moveCamera();
     spotterView(dt);
   }

@@ -11,7 +11,7 @@ export function builder(name, seed, terrainOpts) {
   const rand = mulberry32(seed * 131 + 9);
   const H = (x, z) => terrain.heightAt(x, z);
   const objects = [], enemies = [];
-  const props = { lanes: [], craters: [], poles: [], wires: [], fences: [], bales: [], sandbags: [], trenches: [], dugouts: [], masts: [] };
+  const props = { lanes: [], craters: [], poles: [], wires: [], fences: [], bales: [], sandbags: [], trenches: [], dugouts: [], masts: [], camoNets: [], mortars: [], friendlies: [] };
   let id = 0;
   const b = {
     terrain, rand, H, objects, enemies, props,
