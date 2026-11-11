@@ -18,7 +18,7 @@ const vert = /* glsl */ `
 
 const frag = /* glsl */ `
   uniform sampler2D tScene, tOsd;
-  uniform float uTime, uSignal, uJam, uLost, uGlitch, uAnalog, uAspect, uExposure, uOsd, uSpotter;
+  uniform float uTime, uSignal, uJam, uLost, uGlitch, uAnalog, uAspect, uExposure, uOsd, uSpotter, uRoll;
   varying vec2 vUv;
   const vec3 LW = vec3(0.299, 0.587, 0.114);
 
@@ -74,30 +74,33 @@ const frag = /* glsl */ `
     // Line jitter, tearing bands and, when the link is nearly gone, picture roll.
     uv.x += (hash12(vec2(ly, t)) - 0.5) * 0.004 * smoothstep(0.08, 1.0, bad);
     float band = vnoise(uv.y * 6.0 + uTime * 3.1);
-    float tear = smoothstep(1.0 - bad * 0.55, 1.0, band);
+    float tear = smoothstep(1.0 - bad * 0.7, 1.0, band);
     uv.x += tear * (hash12(vec2(ly * 0.13, t)) - 0.3) * 0.12 * bad;
-    float roll = smoothstep(0.75, 1.0, bad) * fract(uTime * 0.7);
-    uv.y = fract(uv.y + roll);
+    // Vertical roll: as sync is lost the picture slides upward, with the blanking bar crossing the frame.
+    uv.y = fract(uv.y - uRoll);
+    float blank = smoothstep(0.0, 0.025, uv.y) * smoothstep(1.0, 0.975, uv.y);
 
     // Analog bandwidth: soft luma with edge ringing, and chroma smeared much wider.
-    float dx = 1.0 / 720.0;
+    float dx = 1.0 / 520.0; // analog bandwidth, well under the screen's resolution
     vec3 c0 = src(uv);
     vec3 cl = src(uv - vec2(dx, 0.0)), cr = src(uv + vec2(dx, 0.0));
-    vec3 cl2 = src(uv - vec2(dx * 3.2, 0.0)), cr2 = src(uv + vec2(dx * 3.2, 0.0));
+    vec3 cl2 = src(uv - vec2(dx * 3.6, 0.0)), cr2 = src(uv + vec2(dx * 3.6, 0.0));
     float y0 = dot(c0, LW);
     float yb = dot(c0 * 0.44 + (cl + cr) * 0.28, LW);
     float y = yb + (y0 - dot((cl2 + cr2) * 0.5, LW)) * 0.3;
     vec3 chroma = (cl2 + cl + c0 + cr + cr2) * 0.2;
     chroma -= dot(chroma, LW);
-    float sat = mix(1.06, 0.0, smoothstep(0.3, 0.95, bad));
+    float sat = mix(0.86, 0.0, smoothstep(0.25, 0.9, bad));
     vec3 col = vec3(y) + chroma * sat;
 
     // Small-sensor camera response: hard contrast, a slightly cold cast.
-    col = (col - 0.5) * 1.12 + 0.515;
+    col = (col - 0.5) * 1.0 + 0.53;
+    col = mix(vec3(0.07), vec3(0.96), col); // lifted blacks, dimmed whites
     col *= vec3(0.985, 1.0, 1.0);
 
     float n = hash12(floor(gl_FragCoord.xy / 1.5) + vec2(t * 17.0, t * 29.0));
-    col += (n - 0.5) * (0.04 + 0.55 * bad * bad);
+    col += (n - 0.5) * (0.075 + 0.6 * bad * bad);
+    col += (hash12(vec2(ly, t * 3.0)) - 0.5) * 0.035; // line-to-line flicker
     float snow = step(1.0 - 0.025 * bad * bad, hash12(floor(gl_FragCoord.xy / 2.0) + t * 1.3));
     col = mix(col, vec3(0.95), snow);
     col *= 1.0 - 0.05 * (0.5 + 0.5 * sin(gl_FragCoord.y * 2.0943951));
@@ -106,6 +109,7 @@ const frag = /* glsl */ `
     vec3 stat = vec3(hash12(floor(gl_FragCoord.xy / 2.0) + t * 3.7)) * (0.5 + 0.5 * vnoise(vUv.y * 30.0 + uTime * 20.0));
     col = mix(col, stat, max(uLost, smoothstep(0.9, 1.25, bad)));
 
+    col *= mix(0.18, 1.0, blank);
     col *= 1.0 - dot(vc, vc) * 0.6;
     gl_FragColor = vec4(col, 1.0);
   }
@@ -119,7 +123,7 @@ export function createFeed({ renderer }) {
   const u = {
     tScene: { value: rt.texture }, tOsd: { value: blank },
     uTime: { value: 0 }, uSignal: { value: 1 }, uJam: { value: 0 }, uLost: { value: 0 }, uGlitch: { value: 0 },
-    uSpotter: { value: 0 }, uAnalog: { value: 1 }, uAspect: { value: 1 }, uExposure: { value: 1 }, uOsd: { value: 1 },
+    uSpotter: { value: 0 }, uRoll: { value: 0 }, uAnalog: { value: 1 }, uAspect: { value: 1 }, uExposure: { value: 1 }, uOsd: { value: 1 },
   };
   const mat = new THREE.ShaderMaterial({ uniforms: u, vertexShader: vert, fragmentShader: frag, depthTest: false, depthWrite: false });
   const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
@@ -131,7 +135,9 @@ export function createFeed({ renderer }) {
   return {
     uniforms: u,
     setSize(w, h, ratio) {
-      rt.setSize(Math.max(2, Math.round(w * ratio)), Math.max(2, Math.round(h * ratio)));
+      // The camera sensor is far below screen resolution; render the scene at about 60% and let the pass soften it.
+      const k = Math.min(ratio, 1) * 0.6;
+      rt.setSize(Math.max(2, Math.round(w * k)), Math.max(2, Math.round(h * k)));
       u.uAspect.value = w / h;
     },
     render(scene, camera) {

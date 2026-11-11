@@ -63,7 +63,7 @@ export function createVisuals({ canvas, uiRoot, level }) {
   uiRoot.appendChild(overlay);
   const helpTimer = setTimeout(() => { help.style.opacity = '0'; }, 14000);
 
-  let time = 0, glitch = 0, shake = 0, height = 1, washAcc = 0;
+  let time = 0, glitch = 0, shake = 0, height = 1, washAcc = 0, rollSpeed = 0;
   // After the drone detonates its camera is gone: static first, then the spotter drone's view of the strike.
   const strike = { active: false, t: 0, pos: new THREE.Vector3(), eye: new THREE.Vector3() };
   const v = new THREE.Vector3(), lookTarget = new THREE.Vector3();
@@ -190,6 +190,14 @@ export function createVisuals({ canvas, uiRoot, level }) {
     u.uJam.value = override.jam !== null ? +override.jam : link.jamming;
     u.uLost.value = override.lost !== null ? +override.lost : (link.lost ? 1 : 0);
     u.uGlitch.value = analog ? glitch : 0;
+    // The picture starts rolling once the link is poor, faster as it gets worse.
+    const bad = (1 - u.uSignal.value) + u.uJam.value * 0.6 + u.uGlitch.value;
+    // The sim's link.roll (0..1) sets the speed when it is present; otherwise estimate it from the signal.
+    const rollAmt = link.roll ?? THREE.MathUtils.smoothstep(bad, 0.35, 1.0);
+    rollSpeed += (rollAmt * 1.6 - rollSpeed) * Math.min(1, dt * 3);
+    u.uGlitch.value = Math.max(u.uGlitch.value, rollAmt * 0.35); // tearing grows with the roll
+    u.uRoll.value = (u.uRoll.value + rollSpeed * dt) % 1;
+    if (rollSpeed < 0.02) u.uRoll.value *= Math.max(0, 1 - dt * 4); // relock
     if (strike.active && !spotting) {
       // The last frame tears for an instant, then the link is gone.
       u.uGlitch.value = 1.5;

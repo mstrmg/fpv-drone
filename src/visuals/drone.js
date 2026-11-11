@@ -119,9 +119,21 @@ export function createDrone({ scene }) {
   add(cyl(0.016, 0.016, 0.12, 12), olive, 0, 0.165, 0, war);   // tail tube
   add(cyl(0.0372, 0.0372, 0.018, 18), tape, 0, -0.03, 0, war);
   add(cyl(0.0372, 0.0372, 0.018, 18), tape, 0, 0.035, 0, war);
-  for (const sx of [-1, 1]) {
-    const wire = add(cyl(0.0008, 0.0008, 0.07, 4), copper, sx * 0.012, -0.205, 0, war);
-    wire.rotation.z = sx * 0.25;
+  // Firing wires: two insulated leads bent up from the fuse into the bottom of the camera's view,
+  // ending in bare tips that close the circuit on impact.
+  const red = std({ color: 0x8e1f16, roughness: 0.6 });
+  const black = std({ color: 0x111111, roughness: 0.6 });
+  for (const [sx, mat] of [[-1, red], [1, black]]) {
+    const curve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(sx * 0.006, -0.05, -0.19),
+      new THREE.Vector3(sx * 0.014, -0.04, -0.225),
+      new THREE.Vector3(sx * 0.02, -0.018, -0.25),
+      new THREE.Vector3(sx * 0.024, 0.014, -0.266),
+    ]);
+    add(new THREE.TubeGeometry(curve, 16, 0.0018, 5), mat, 0, 0, 0);
+    const tip = curve.getPoint(1);
+    const bare = add(cyl(0.0011, 0.0011, 0.016, 5), copper, tip.x, tip.y + 0.007, tip.z - 0.002);
+    bare.rotation.x = -0.25;
   }
 
   scene.add(group);
