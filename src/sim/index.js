@@ -121,7 +121,7 @@ export async function createSim({ level, settings = {} }) {
       batteryV: 0, batteryPct: 100, mAhUsed: 0, currentA: 0, flightTimeS: 0, linkQuality: 100,
       warhead: 'SAFE', warheadArmInM: ARM_DISTANCE_M, warnings: [],
     },
-    link: { signal: 1, jamming: 0, lost: false },
+    link: { signal: 1, jamming: 0, lost: false, roll: 0 },
     env: { wind: wind.value },
     entities: [],
   };
@@ -164,6 +164,9 @@ export async function createSim({ level, settings = {} }) {
     state.drone.destroyed = false;
     state.drone.warhead.state = 'safe';
     state.link.lost = false;
+    state.link.signal = 1;
+    state.link.roll = 0;
+    signalLost = false;
     respawnAt = -1;
     launchPoint.set(position[0], position[1], position[2]);
     flightTime = 0;
@@ -245,6 +248,7 @@ export async function createSim({ level, settings = {} }) {
     applyBlast(pos, [_dir.x, _dir.y, _dir.z], warhead);
 
     state.link.lost = true;
+    state.link.roll = 0; // the feed is simply gone, not rolling
     respawnAt = state.time + RESPAWN_DELAY;
     emit({ type: 'drone_lost', reason: 'detonated', respawnIn: RESPAWN_DELAY });
   }
@@ -278,6 +282,41 @@ export async function createSim({ level, settings = {} }) {
       }
       res.after?.();
     }
+  }
+
+  // Analog video link: weakens with distance from the launch point, flying low
+  // (the ground blocks the signal) and hills between you and the launch point.
+  // `roll` drives the picture rolling vertically as sync starts to fail.
+  const LINK_RANGE_M = 800;
+  let linkTick = 0;
+  let occlusion = 1;
+  let signalLost = false;
+  function updateLink(dt) {
+    const l = state.link;
+    if (state.drone.destroyed) return;
+    const p = body.translation();
+    const T = level.terrain;
+    const dist = launchPoint.distanceTo(_to.set(p.x, p.y, p.z));
+    const agl = Math.max(0, p.y - T.heightAt(p.x, p.z));
+    if ((linkTick++ & 7) === 0) { // terrain between us and the launch point, sampled a few times a second
+      let blocked = 0;
+      const N = 12;
+      for (let i = 1; i < N; i++) {
+        const t = i / N;
+        const x = launchPoint.x + (p.x - launchPoint.x) * t, z = launchPoint.z + (p.z - launchPoint.z) * t;
+        const y = launchPoint.y + 1 + (p.y - launchPoint.y - 1) * t;
+        blocked = Math.max(blocked, T.heightAt(x, z) - y);
+      }
+      occlusion = blocked > 0 ? Math.max(0.25, 1 - blocked / 15) : 1;
+    }
+    const range = Math.max(0, 1 - (dist / LINK_RANGE_M) ** 2);
+    const lowFly = Math.max(0, Math.min(1, (4 - agl) / 4)) * (0.25 + 0.75 * Math.min(1, dist / 120));
+    const target = range * (1 - 0.75 * lowFly) * occlusion;
+    l.signal += (target - l.signal) * Math.min(1, dt / 0.25);
+    l.roll = Math.min(1, Math.max(0, (0.6 - l.signal) / 0.4)) ** 1.5;
+    const lost = l.signal < 0.08;
+    if (lost !== signalLost) { signalLost = lost; emit({ type: lost ? 'link_lost' : 'link_restored' }); }
+    l.lost = lost;
   }
 
   function updateWarheadArming() {
@@ -389,6 +428,7 @@ export async function createSim({ level, settings = {} }) {
     if (Math.abs(p.x) > half || Math.abs(p.z) > half || p.y < -200) crash([p.x, p.y, p.z], 0);
 
     updateWarheadArming();
+    updateLink(dt);
     writeState(controls);
   }
 

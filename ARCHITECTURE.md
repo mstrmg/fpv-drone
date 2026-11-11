@@ -114,10 +114,13 @@ SimState = {
     warnings: string[],       // e.g. 'CRASH', 'LOW BATTERY', 'THROTTLE', 'DISARMED'
   },
 
-  link: {                     // analog video feed quality, drives the static shader (M3)
-    signal: number,           // 0..1, 1 = perfect
-    jamming: number,          // 0..1
-    lost: boolean,            // feed is gone (show full static / no-signal)
+  link: {                     // analog video feed quality, drives the static shader
+    signal: number,           // 0..1, 1 = perfect; smoothed. Drops with distance from launch (~800 m limit),
+                              // when flying low (< 4 m above ground, worse the further out) and behind hills
+    roll: number,             // 0..1: the picture rolls vertically (loss of sync). 0 above signal 0.6, 1 near signal 0.2.
+                              // Visuals: scroll the image up/down with a sawtooth, speed and tearing scale with roll
+    jamming: number,          // 0..1 (M3)
+    lost: boolean,            // feed is gone (signal < 0.08 or the drone detonated): full static / no-signal
   },
 
   env: {
@@ -164,7 +167,7 @@ Every event has `{ type, time }` plus:
 | `entity_destroyed` | `entityId, kind, position, cause: 'blast' \| 'fragments' \| 'jet' \| 'cookoff'` | a target died; it stays in `state.entities` as a corpse / wreck |
 | `targets_reset`    | –            | all enemies respawned at their start (ids unchanged): clear wrecks, fires and corpses |
 | `entity_alerted`   | `entityId, position` | a unit noticed the drone (visuals may play a shout / turn head); optional to use |
-| `link_lost` / `link_restored` | – | M3 |
+| `link_lost` / `link_restored` | – | signal fell below 0.08 / recovered (not sent for the detonation cut, see `drone_lost`) |
 
 `explosion` fields:
 

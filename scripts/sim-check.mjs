@@ -268,5 +268,17 @@ async function boom(warhead, target, offset) {
   check('infantry notice the drone and react', reacting >= 3 && ev.some((x) => x.type === 'entity_alerted'), `${reacting}/${squad.length} fleeing or prone`);
 }
 
+// 17. Video link: fine up high, rolls when low and far from the launch point
+{
+  const { sim, c } = await fresh({ warhead: 'none', wind: false });
+  const put = (x, z, agl) => { sim._body.setTranslation({ x, y: level.terrain.heightAt(x, z) + agl, z }, true); sim._body.setLinvel({ x: 0, y: 0, z: 0 }, true); };
+  c.throttle = 0.28;
+  put(0, -150, 40); run(sim, c, 1.5);
+  const high = { s: sim.state.link.signal, r: sim.state.link.roll };
+  put(0, -250, 1); c.throttle = 0.2; run(sim, c, 0.35);
+  const low = { s: sim.state.link.signal, r: sim.state.link.roll };
+  check('link strong when high, rolls when low and far', high.s > 0.8 && high.r === 0 && low.r > 0.1 && low.s < high.s, `high ${high.s.toFixed(2)}/roll ${high.r.toFixed(2)}; low ${low.s.toFixed(2)}/roll ${low.r.toFixed(2)}`);
+}
+
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed');
 process.exit(failures ? 1 : 0);
