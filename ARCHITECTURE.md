@@ -134,6 +134,7 @@ SimState = {
     done, total,            // targets dealt with (dead, down, or vehicle knocked out) / all
     speaker, line: string | null, lineId,   // subtitle on screen now; lineId changes with every new line (speak it once)
     cutscene: null | { position:[x,y,z], target:[x,y,z], fovDeg },  // on foot: show the spotter feed from here instead of the eyes
+    bearing: null | { fromHome: { deg, m }, fromDrone: { deg, m } | null, moving: 'east' | ... | null }, // compass (0 = north = −Z) to the live targets
     spotter: { position, target, fovDeg },  // what his drone sees all the time: the TV in the dugout (copies the cutscene while there is one)
   },
   // There is no chase / third-person view: the game is FPV only.
@@ -285,7 +286,7 @@ Every event has `{ type, time }` plus:
 | `entity_alerted`   | `entityId, position` | a unit noticed the drone (visuals may play a shout / turn head); optional to use |
 | `link_lost` / `link_restored` | – | signal fell below 0.08 / recovered (not sent for the detonation cut, see `drone_lost`) |
 | `mission`          | `id, phase: 'intro' \| 'active' \| 'complete', title` | campaign mission started / objective live / all targets dealt with |
-| `mission_line`     | `speaker, text, lineId` | the other soldier says something |
+| `mission_line`     | `speaker, text, lineId, radio?` | the other soldier says something (`radio`: a bearing call while you fly) |
 | `entity_shot`      | `entityId, from:[x,y,z], to:[x,y,z], hit` | a panicked soldier fires a round at the drone (muzzle flash + tracer) |
 | `entity_throw`     | `entityId, item: 'helmet' \| 'rifle', position, velocity` | he throws it at the drone: it flies ballistically from there |
 | `mode`             | `mode: 'foot' \| 'drone'` | goggles on / off (campaign). After a detonation the next drone is put by the mast and you are back on foot |

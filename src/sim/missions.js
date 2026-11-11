@@ -14,6 +14,9 @@
 // If any got away the mission has failed: the outro plays, then the mission restarts.
 // A shot is the spotter camera while that line plays: { look: 'targets' | [x,y,z], range, height, bearing, fov }
 // (camera `range` m from the look point, `height` m above it, from `bearing` rad: 0 = from the south).
+// A line may say `{brg}` / `{rng}` / `{dir}`: the targets' compass bearing (3 digits, 0 = north = −Z) and range
+// from the dugout, rounded the way he would say it, and the way they are moving.
+// While you fly an active mission he calls the bearing and range from your drone over the radio now and then.
 // Targets are the level enemies whose def has `mission: <id>`. A target counts as dealt with once it
 // is dead or can no longer fight (down / crawling, or a knocked-out vehicle).
 
@@ -27,6 +30,7 @@ export function createMissions({ level, entities, state, emit }) {
     speaker: SPEAKER, line: null, lineId: 0,                 // the subtitle on screen now; lineId changes per line
     cutscene: null,                                          // spotter camera { position, target, fovDeg } while briefing
     spotter: { position: [0, 0, 0], target: [0, 0, 0], fovDeg: 10 }, // what his drone sees all the time (the TV in the dugout)
+    bearing: null,          // { fromHome: { deg, m }, fromDrone: { deg, m } | null, moving: 'east' | ... | null }: where the targets are
   };
   state.mission = list.length ? m : null;
   if (!list.length) return { update() {}, skip() { return false; }, reset() {} };
@@ -52,15 +56,22 @@ export function createMissions({ level, entities, state, emit }) {
 
   function run(lines) { script = lines; step = 0; clock = 0; waiting = lines[0]?.after ?? 0; lineEnds = -1; m.line = null; m.cutscene = null; }
 
+  function fill(text) {
+    const b = m.bearing;
+    if (!b) return text;
+    return text.replace('{brg}', brg(b.fromHome.deg)).replace('{rng}', String(roundRange(b.fromHome.m)))
+      .replace('{dir}', b.moving ?? 'along it');
+  }
+
   function say(l) {
-    m.line = l.say; m.lineId++;
+    m.line = fill(l.say); m.lineId++;
     lineEnds = clock + (l.dur ?? Math.max(2.5, l.say.length * 0.065));
     m.cutscene = l.shot ? shot(l.shot) : null;
-    emit({ type: 'mission_line', speaker: SPEAKER, text: l.say, lineId: m.lineId });
+    emit({ type: 'mission_line', speaker: SPEAKER, text: m.line, lineId: m.lineId });
   }
 
   function aim() {
-    const live = targets.filter((e) => !e.destroyed);
+    const live = targets.filter((e) => !dealtWith(e) && !e.escaped);
     const pool = live.length ? live : targets;
     centre[0] = centre[1] = centre[2] = 0;
     for (const e of pool) { centre[0] += e.x; centre[1] += e.y; centre[2] += e.z; }
@@ -107,6 +118,57 @@ export function createMissions({ level, entities, state, emit }) {
     sp.fovDeg = live ? 11 : 16;
   }
 
+  // Compass bearing (0 = north = −Z, 90 = east = +X) and range from one point to another.
+  const home = level.home ? [level.home.x, level.home.z] : level.start ? [level.start.position[0], level.start.position[2]] : [0, 0];
+  const CARD = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+  function fix(out, from, to) {
+    const dx = to[0] - from[0], dz = to[2] - from[1];
+    out.deg = (Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360;
+    out.m = Math.hypot(dx, dz);
+    return out;
+  }
+  const brg = (deg) => String(Math.round(deg) % 360).padStart(3, '0');
+  const roundRange = (r) => r < 200 ? Math.round(r / 10) * 10 : r < 1000 ? Math.round(r / 50) * 50 : Math.round(r / 100) * 100;
+  const fromHome = { deg: 0, m: 0 }, fromDrone = { deg: 0, m: 0 };
+  function track() {
+    const live = targets.filter((e) => !dealtWith(e) && !e.escaped);
+    if (!targets.length || (!live.length && m.phase === 'active')) { m.bearing = null; return; }
+    const c = aim();
+    fix(fromHome, home, c);
+    const d = state.drone;
+    const flying = state.mode !== 'foot' && d && !d.destroyed && !d.crashed;
+    if (flying) fix(fromDrone, [d.position[0], d.position[2]], c);
+    let vx = 0, vz = 0;
+    for (const e of live) { vx += e.s.velocity[0]; vz += e.s.velocity[2]; }
+    const n = Math.max(1, live.length);
+    const moving = Math.hypot(vx / n, vz / n) > 3 ? CARD[Math.round(((Math.atan2(vx, -vz) * 180 / Math.PI + 360) % 360) / 45) % 8] : null;
+    m.bearing = { fromHome, fromDrone: flying ? fromDrone : null, moving };
+  }
+
+  // On the radio while you fly: where they are from you. More often when they are moving.
+  let callT = 0, callEnds = 0, called = 0;
+  function callouts(dt) {
+    if (m.phase !== 'active') { callT = 0; called = 0; return; }
+    callT += dt;
+    if (m.line && callT >= callEnds) m.line = null;
+    const b = m.bearing?.fromDrone;
+    if (!b || m.line) return;
+    const every = called === 0 ? 5 : m.bearing.moving ? 14 : 22;
+    if (callT < every) return;
+    if (b.m < 60) return; // he can see you're on them
+    const deg = brg(b.deg), r = roundRange(b.m), mv = m.bearing.moving;
+    const lines = b.m < 200
+      ? [`Close now. ${deg}, ${r} metres.`, `${r} metres, bearing ${deg}. Look down.`]
+      : mv
+        ? [`They're bearing ${deg} from you, ${r} metres, heading ${mv}.`, `${deg}, ${r} out. Still going ${mv}.`]
+        : [`They're bearing ${deg} from you, ${r} metres.`, `From you: ${deg}, about ${r}.`];
+    const text = lines[called % lines.length];
+    called++; callT = 0;
+    m.line = text; m.lineId++;
+    callEnds = Math.max(2.8, text.length * 0.065);
+    emit({ type: 'mission_line', speaker: SPEAKER, text, lineId: m.lineId, radio: true });
+  }
+
   function dealtWith(e) {
     if (e.destroyed) return true;
     if (e.def.vehicle) return !e.v.operational || e.v.abandoned;
@@ -139,6 +201,8 @@ export function createMissions({ level, entities, state, emit }) {
         else if (clock >= waiting) { clock = 0; say(script[step]); }
       }
     }
+    track();
+    callouts(dt);
     moveCamera();
     spotterView(dt);
   }

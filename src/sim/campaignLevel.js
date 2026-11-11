@@ -316,13 +316,13 @@ export function createCampaignLevel() {
     objective: 'Take out the squad digging in along the treeline north of us',
     intro: [
       { after: 3, say: 'Hey. Hey, come here. Look what I got here.', dur: 3.2 },
-      { say: 'Shelled treeline, straight north. Five, six hundred metres.', dur: 5,
+      { say: 'Shelled treeline, bearing {brg} from us. {rng} metres.', dur: 5,
         shot: { look: 'targets', range: 420, height: 160, bearing: 0.15, fov: 9, drift: 0.008 } },
       { say: 'Five of them. Riflemen, a machine gunner with the PK, that one has an RPG... and the officer walking about.', dur: 7,
         shot: { look: 'targets', range: 230, height: 90, bearing: -0.35, fov: 15, drift: 0.012 } },
       { say: 'They\'re digging in. Not going anywhere. Go get them.', dur: 4,
         shot: { look: 'targets', range: 150, height: 70, bearing: 0.5, fov: 9, drift: 0.01 } },
-      { after: 0.5, say: 'Goggles are on the table. Bird\'s ready outside.', dur: 3.5 },
+      { after: 0.5, say: 'Goggles are on the table. I\'ll call bearings on the radio.', dur: 4 },
     ],
     outro: [
       { after: 1.5, say: 'Good hits. That\'s the treeline clear.', dur: 4 },
@@ -336,9 +336,9 @@ export function createCampaignLevel() {
         shot: { look: 'targets', range: 520, height: 200, bearing: 0.9, fov: 10, drift: 0.004 } },
       { say: 'A bike and two quads, flat out. Fifty, sixty kilometres an hour.', dur: 5,
         shot: { look: 'targets', range: 260, height: 110, bearing: 1.3, fov: 9, drift: 0.004 } },
-      { say: 'The road behind their first line, heading east. They\'ll be gone in a couple of minutes.', dur: 5.5,
+      { say: 'The road behind their first line. Bearing {brg}, {rng} metres, going {dir}. They\'ll be gone in a couple of minutes.', dur: 5.5,
         shot: { look: 'targets', range: 380, height: 160, bearing: 0.6, fov: 14, drift: 0.004 } },
-      { say: 'Get up there. Fast.', dur: 2.5 },
+      { say: 'Get up there. Fast. I\'ll call them for you.', dur: 3.2 },
     ],
     outro: [
       { after: 1.5, say: 'All three. Nice flying.', dur: 3.5 },
@@ -350,7 +350,7 @@ export function createCampaignLevel() {
       { after: 1.5, say: 'They\'re gone. Too fast for us.', dur: 3.5 },
     ],
     retry: [
-      { after: 5, say: 'Hold on... more of them. Same road, same way.', dur: 4,
+      { after: 5, say: 'Hold on... more of them. Same road, bearing {brg}, {rng} metres.', dur: 4,
         shot: { look: 'targets', range: 400, height: 160, bearing: 0.9, fov: 11, drift: 0.004 } },
       { say: 'Don\'t let these ones go.', dur: 2.5 },
     ],

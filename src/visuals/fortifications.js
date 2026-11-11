@@ -99,6 +99,15 @@ function tvOverlayTexture() {
   const W = 384, H = 216, c = document.createElement('canvas');
   c.width = W; c.height = H;
   const g = c.getContext('2d');
+  const tex = canvasTexture(c, {});
+  // `info`: the bottom line, e.g. the targets' bearing and range from the dugout.
+  tex.draw = (info) => { drawTvOverlay(g, W, H, info); tex.needsUpdate = true; };
+  tex.draw('');
+  return tex;
+}
+
+function drawTvOverlay(g, W, H, info) {
+  g.clearRect(0, 0, W, H);
   g.strokeStyle = 'rgba(235,240,230,0.8)'; g.lineWidth = 1.5;
   const cx = W / 2, cy = H / 2;
   for (const [x0, y0, x1, y1] of [[cx - 22, cy, cx - 7, cy], [cx + 7, cy, cx + 22, cy], [cx, cy - 22, cx, cy - 7], [cx, cy + 7, cx, cy + 22]]) {
@@ -114,7 +123,7 @@ function tvOverlayTexture() {
   g.fillText('REC', 33, 34);
   g.fillText('x16', W - 44, 34);
   g.fillText('ALT 130  BAT 62%', 20, H - 22);
-  return canvasTexture(c, {});
+  if (info) { g.font = 'bold 15px monospace'; g.fillStyle = 'rgba(245,245,235,0.95)'; g.fillText(info, W - 20 - g.measureText(info).width, H - 22); }
 }
 
 export function createFortifications({ scene, level }) {
@@ -483,7 +492,7 @@ export function createFortifications({ scene, level }) {
 
   // ---- Inside the player's dugout ---------------------------------------------------------------
   const home = dugouts.find((d) => d.player);
-  let buddy = null, lamp = null, soldiers = null, tvMat = null, tvScreen = null;
+  let buddy = null, lamp = null, soldiers = null, tvMat = null, tvScreen = null, tvInfo = null, tvText = '';
   const tvParts = [];
   const spares = [];
   if (home) {
@@ -548,8 +557,9 @@ export function createFortifications({ scene, level }) {
     tvScreen = new THREE.Mesh(keep(new THREE.PlaneGeometry(tvW, tvH)), tvMat);
     tvScreen.position.set(tx, tvY, tvZ + 0.04);
     room.add(tvScreen);
+    tvInfo = keep(tvOverlayTexture());
     const tvOver = new THREE.Mesh(keep(new THREE.PlaneGeometry(tvW, tvH)),
-      keep(new THREE.MeshBasicMaterial({ map: keep(tvOverlayTexture()), transparent: true, depthWrite: false, color: 0x9a9a9a })));
+      keep(new THREE.MeshBasicMaterial({ map: tvInfo, transparent: true, depthWrite: false, color: 0x9a9a9a })));
     tvOver.position.set(tx, tvY, tvZ + 0.052);
     room.add(tvOver);
     tvParts.push(tvScreen, tvOver);
@@ -628,6 +638,7 @@ export function createFortifications({ scene, level }) {
       position: tvScreen.getWorldPosition(new THREE.Vector3()),
       setPicture(tex) { tvMat.map = tex; tvMat.color.setScalar(tex ? 0.75 : 0.02); tvMat.needsUpdate = true; },
       visible(on) { for (const o of tvParts) o.visible = on; },
+      info(text) { if (text !== tvText) { tvText = text; tvInfo.draw(text); } },
     } : null,
     update(dt, camPos) {
       t += dt;

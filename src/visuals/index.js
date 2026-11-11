@@ -99,6 +99,7 @@ export function createVisuals({ canvas, uiRoot, level }) {
   spotter.style.cssText = 'position:absolute;left:3%;top:5%;display:none;font-size:13px;letter-spacing:.14em;line-height:1.7;text-shadow:0 0 3px #000;';
   spotter.innerHTML = '<span style="color:#ff5a4a">&#9679; REC</span> &nbsp;SPOTTER UAV<br><span style="opacity:.75">TARGET AREA &middot; ZOOM 7X</span>';
   overlay.append(help, paused, spotter);
+  let spotterHtml = '';
   uiRoot.appendChild(overlay);
   const helpTimer = setTimeout(() => { help.style.opacity = '0'; }, 14000);
   let helpFade = 0;
@@ -295,6 +296,15 @@ export function createVisuals({ canvas, uiRoot, level }) {
     if (foot && !debug.freeCam) { u.uLost.value = 0; u.uGlitch.value = 0; }
     u.uSpotter.value = spotting ? 1 : 0;
     spotter.style.display = spotting && !debug.freeCam ? 'block' : 'none';
+    // His feed carries where the targets are from us: bearing and range.
+    const bh = state.mission?.bearing?.fromHome;
+    const fixText = bh ? `TGT BRG ${String(Math.round(bh.deg) % 360).padStart(3, '0')}° · ${Math.round(bh.m / 10) * 10} M` : '';
+    if (spotting) {
+      const html = briefing && fixText ? `<span style="color:#ff5a4a">&#9679; REC</span> &nbsp;SPOTTER UAV<br><span style="opacity:.9">${fixText}</span>`
+        : '<span style="color:#ff5a4a">&#9679; REC</span> &nbsp;SPOTTER UAV<br><span style="opacity:.75">TARGET AREA &middot; ZOOM 7X</span>';
+      if (spotterHtml !== html) { spotterHtml = html; spotter.innerHTML = html; }
+    }
+    forts.tv?.info(fixText);
     paused.style.display = state.paused ? 'flex' : 'none';
 
     renderTv(state, foot && !briefing);
