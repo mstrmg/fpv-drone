@@ -142,9 +142,19 @@ export function createExplosions({ scene, level, smoke, fire, terrain }) {
     if (moving) chunks.instanceMatrix.needsUpdate = true;
   }
 
+  function clear() {
+    emitters.length = 0;
+    chunkState.length = 0;
+    chunkNext = 0;
+    chunks.count = 0;
+    flash = 0;
+    light.intensity = 0;
+  }
+
   return {
     explode,
     update,
+    clear,
     dispose() { scene.remove(light, chunks); chunkGeo.dispose(); chunkMat.dispose(); chunks.dispose(); },
   };
 }

@@ -283,7 +283,9 @@ export function createEntities({ scene, level, smoke, fire }) {
 
   function hit(ev) {
     const p = ev.position;
-    for (let i = 0; i < 18; i++) {
+    // A weak-spot hit (engine deck, ammo, turret ring) throws a bigger, hotter spray.
+    const n = ev.weakSpot ? 40 : 18;
+    for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, el = Math.random() * 1.2, sp = 6 + Math.random() * 14;
       fire.spawn({ pos: p, vel: [Math.cos(a) * Math.cos(el) * sp, Math.sin(el) * sp, Math.sin(a) * Math.cos(el) * sp], size: 0.1, grow: 0, life: 0.25 + Math.random() * 0.4, drag: 1, gravity: 9.8, color: [3, 2, 0.9], colorEnd: [1, 0.3, 0.05], alpha: 1, fadeIn: 100 });
     }
@@ -299,13 +301,18 @@ export function createEntities({ scene, level, smoke, fire }) {
       } else if (ev.type === 'explosion' && ev.kind === 'ammo') {
         // The sim's delayed secondary blast; a tank caught in it loses its turret.
         for (const v of live.values()) if (v.kind === 'tank' && v.root.position.distanceTo(tmpV.fromArray(ev.position)) < 6) tossTurret(v);
-      } else if (ev.type === 'reset' && state.entities.length === 0) clear();
+      } else if (ev.type === 'targets_reset' || (ev.type === 'reset' && (state.entities ?? []).length === 0)) {
+        // Every enemy respawns with the same id: drop wrecks and corpses so they are rebuilt intact.
+        clear();
+        smoke.clear(); fire.clear();
+      }
     }
 
     const seen = new Set();
     for (const e of state.entities ?? []) {
       seen.add(e.id);
       let v = live.get(e.id);
+      if (v && v.dead && e.status !== 'destroyed') { remove(e.id, v); v = null; } // came back to life
       if (!v) { v = create(e); live.set(e.id, v); if (e.status === 'destroyed' && v.kind !== 'infantry') killVehicle(v); }
       const speed = Math.hypot(e.velocity?.[0] ?? 0, e.velocity?.[2] ?? 0);
 

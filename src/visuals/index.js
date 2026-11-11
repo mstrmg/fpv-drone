@@ -88,6 +88,8 @@ export function createVisuals({ canvas, uiRoot, level }) {
         const dist = v.fromArray(ev.position).distanceTo(lookTarget.fromArray(state.drone.position));
         if (dist < 3 && (ev.kind ?? 'warhead') === 'warhead') beginStrike(ev.position);
         else { shake = Math.max(shake, Math.min(1, 14 / (dist + 1))); glitch = Math.max(glitch, Math.min(0.6, 8 / (dist + 1))); }
+      } else if (ev.type === 'targets_reset') {
+        explosions.clear();
       } else if (ev.type === 'drone_lost') {
         if (!strike.active) beginStrike(state.drone.position);
       } else if (ev.type === 'reset') {
