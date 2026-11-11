@@ -1208,6 +1208,7 @@ export function createEntities({ scene, level, smoke, fire }) {
       }
 
       if (e.status === 'destroyed' && !v.dead) killVehicle(v, e, true);
+      v.root.visible = e.status !== 'escaped'; // got away down the road, off the map
       // Burning without having blown up: the fire takes hold quietly.
       if (e.fire === 'full' && !v.dead) killVehicle(v, e, true, true);
       v.sink += (v.sinkTarget - v.sink) * Math.min(1, dt * 0.4);

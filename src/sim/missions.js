@@ -5,8 +5,11 @@
 // level.missions = [{
 //   id, title, objective,                      // objective: one line for the HUD
 //   intro: [{ say, after?, dur?, shot? }],     // lines in order; `after` s of silence first; `dur` s on screen
-//   outro: [{ say, after?, dur? }],
+//   outro: [{ say, after?, dur? }],           // all targets dealt with
+//   outroPartial?, outroFailed?,               // some / all of them got away (enemy defs with `route: true`)
 // }]
+// Targets with `waitFor: <id>` sit still until that mission starts. A target on a `route` that reaches
+// its last point has escaped: the mission ends once every target is dealt with or gone (no timer shown).
 // A shot is the spotter camera while that line plays: { look: 'targets' | [x,y,z], range, height, bearing, fov }
 // (camera `range` m from the look point, `height` m above it, from `bearing` rad: 0 = from the south).
 // Targets are the level enemies whose def has `mission: <id>`. A target counts as dealt with once it
@@ -18,7 +21,7 @@ export function createMissions({ level, entities, state, emit }) {
   const list = level.missions ?? [];
   const m = {
     id: null, title: null, objective: null, phase: 'none',   // 'intro' | 'active' | 'outro' | 'done' | 'none'
-    done: 0, total: 0,
+    done: 0, total: 0, escaped: 0,
     speaker: SPEAKER, line: null, lineId: 0,                 // the subtitle on screen now; lineId changes per line
     cutscene: null,                                          // spotter camera { position, target, fovDeg } while briefing
     spotter: { position: [0, 0, 0], target: [0, 0, 0], fovDeg: 10 }, // what his drone sees all the time (the TV in the dugout)
@@ -37,7 +40,8 @@ export function createMissions({ level, entities, state, emit }) {
     if (!def) { m.phase = 'done'; m.line = null; m.cutscene = null; return; }
     m.id = def.id; m.title = def.title; m.objective = def.objective;
     targets = entities.list.filter((e) => e.tag === def.id);
-    m.total = targets.length; m.done = 0;
+    m.total = targets.length; m.done = 0; m.escaped = 0;
+    for (const e of targets) if (e.waitFor === def.id) e.go = true;
     m.phase = 'intro';
     run(def.intro ?? []);
     emit({ type: 'mission', id: def.id, phase: 'intro', title: def.title });
@@ -111,10 +115,12 @@ export function createMissions({ level, entities, state, emit }) {
     clock += dt;
     if (m.phase === 'active') {
       m.done = targets.filter(dealtWith).length;
-      if (m.done >= m.total) {
+      m.escaped = targets.filter((e) => e.escaped && !dealtWith(e)).length;
+      if (m.done + m.escaped >= m.total) {
         m.phase = 'outro';
-        emit({ type: 'mission', id: m.id, phase: 'complete', title: m.title });
-        run(list[index].outro ?? []);
+        const def = list[index];
+        emit({ type: 'mission', id: m.id, phase: 'complete', title: m.title, done: m.done, escaped: m.escaped });
+        run((m.escaped === 0 ? def.outro : m.done === 0 ? def.outroFailed ?? def.outroPartial : def.outroPartial) ?? def.outro ?? []);
       }
     }
     if (m.phase === 'intro' || m.phase === 'outro') {

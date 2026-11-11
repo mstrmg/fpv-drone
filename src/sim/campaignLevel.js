@@ -299,6 +299,15 @@ export function createCampaignLevel() {
   m.bales(DX + 60, DZ + 40, 6, true);
   craterField(-1400, 1400, -1450, -200, 45);
 
+  // ---- Mission 2: three bikes running the lateral road behind their line ----------------------
+  // A bike and two quads, nose to tail at 50-60 km/h, west to east. Parked at the far end of the
+  // road until the mission starts; past the last point they have got away (about two minutes).
+  const RUN = [[-700, -330], [0, -312], [600, -325], [1100, -320], [1460, -312]];
+  [['moto', -950, 15.8], ['atv', -975, 15.3], ['atv', -1000, 15.3]].forEach(([variant, x, speed]) => {
+    const z = -320 - 10 * (x + 1536) / 836;
+    m.enemy('light', variant, x, z, { patrol: [[x, z], ...RUN], speed, route: true, waitFor: 'convoy', mission: 'convoy', yaw: -Math.PI / 2 });
+  });
+
   // ---- Missions ---------------------------------------------------------------------------------
 
   const missions = [{
@@ -317,6 +326,28 @@ export function createCampaignLevel() {
     ],
     outro: [
       { after: 1.5, say: 'Good hits. That\'s the treeline clear.', dur: 4 },
+    ],
+  }, {
+    id: 'convoy',
+    title: 'Road runners',
+    objective: 'Hit the bike and the two quads on the road before they get away',
+    intro: [
+      { after: 6, say: 'Wait. Wait, look. Movement on their road.', dur: 3.2,
+        shot: { look: 'targets', range: 520, height: 200, bearing: 0.9, fov: 10, drift: 0.004 } },
+      { say: 'A bike and two quads, flat out. Fifty, sixty kilometres an hour.', dur: 5,
+        shot: { look: 'targets', range: 260, height: 110, bearing: 1.3, fov: 9, drift: 0.004 } },
+      { say: 'The road behind their first line, heading east. They\'ll be gone in a couple of minutes.', dur: 5.5,
+        shot: { look: 'targets', range: 380, height: 160, bearing: 0.6, fov: 14, drift: 0.004 } },
+      { say: 'Get up there. Fast.', dur: 2.5 },
+    ],
+    outro: [
+      { after: 1.5, say: 'All three. Nice flying.', dur: 3.5 },
+    ],
+    outroPartial: [
+      { after: 1.5, say: 'Some got through. Still, good hits.', dur: 4 },
+    ],
+    outroFailed: [
+      { after: 1.5, say: 'They\'re gone. Too fast for us this time.', dur: 4 },
     ],
   }];
 

@@ -106,6 +106,10 @@ Infantry within 32 m of a flying drone panic instead of running: they dodge side
 throw their helmet or rifle at it (`entity_throw`) and now and then fire a burst (`entity_shot`, rarely a hit).
 Hitboxes: vehicles are compound boxes per variant (HIT_SHAPES: hull, turret, gun...); infantry boxes follow posture
 (standing, lying, seated).
+Level enemy defs may carry `speed` (m/s along the patrol), `route: true` (one way: past the last point the unit has
+escaped, status `'escaped'`, and the visuals hide it) and `waitFor: <mission id>` (parked until that mission starts).
+Missions end when every target is dealt with or escaped; `outroPartial` / `outroFailed` play when some / all got away,
+and the `mission` complete event carries `done, escaped`.
 Level enemy defs may carry `riders: [variant, ...]`: infantry that ride on top of that vehicle (seats per
 variant in RIDER_SEATS, src/sim/entities.js) until it is knocked out or stops while they are alarmed.
 

@@ -96,6 +96,13 @@ export const VARIANTS = {
       crewBlast: 1.0, crewFrag: 1.8, crewShield: 1, engineBlast: 0.7, engineFrag: 0.8, fuelFrag: 0.7, fuelFire: 0.6,
       cookoff: { chance: 0.3, delay: [0.5, 1.5], kind: 'vehicle', chargeKg: 0.05, radius: 1.5, fragmentRadius: 4, fragmentLethality: 0.15 },
     },
+    moto: {                                                  // dirt bike: one rider, the fastest thing on the road
+      size: [0.8, 1.2, 2.1], walk: 8, run: 19, turnRate: 2.8, accel: 8, frag: 1.0, blast: 1.2, hearing: 35,
+      seats: [seat('driver', [0, 0.75, 0.25], 1.0, 1)],
+      parts: { engine: part([0, 0.4, 0], 0.3), fuel: part([0, 0.85, -0.3], 0.2) },
+      crewBlast: 1.0, crewFrag: 1.9, crewShield: 1, engineBlast: 0.7, engineFrag: 0.8, fuelFrag: 0.7, fuelFire: 0.6,
+      cookoff: { chance: 0.2, delay: [0.5, 1.5], kind: 'vehicle', chargeKg: 0.03, radius: 1.2, fragmentRadius: 3, fragmentLethality: 0.1 },
+    },
     technical: {                                             // pickup with a mounted heavy MG
       size: [2.0, 2.3, 5.2], run: 19, turret: 2.0, hearing: 25,
       seats: [seat('driver', [-0.5, 0.45, -0.4], 0.9, 1), seat('troop', [0.5, 0.45, -0.4], 0.9, 1), seat('gunner', [0, 0.9, 0.45], 1.0, 1)],
@@ -178,6 +185,7 @@ const HIT_SHAPES = {
   pickup: [{ c: [0, 0.3, 0], h: [0.5, 0.3, 0.5] }, { c: [0, 0.79, -0.12], h: [0.47, 0.18, 0.19] }],
   technical: [{ c: [0, 0.26, 0], h: [0.5, 0.26, 0.5] }, { c: [0, 0.68, -0.12], h: [0.47, 0.15, 0.19] }, { c: [0, 0.75, 0.27], h: [0.15, 0.2, 0.1] }],
   atv: [{ c: [0, 0.4, 0], h: [0.5, 0.4, 0.5] }],
+  moto: [{ c: [0, 0.4, 0], h: [0.35, 0.4, 0.5] }],
 };
 // Infantry by posture: standing, lying (prone, crawling, down, dead) and sitting on a vehicle.
 const INF_SHAPES = {
@@ -275,6 +283,10 @@ export function createEntities(ctx) {
       hold: !!def.hold,           // holds its ground: takes cover and moves about, never runs off
       spawn: { x: def.position[0], z: def.position[1], yaw: def.yaw ?? 0 },
       patrol: def.patrol ?? null, idleTime: def.idleTime ?? (type.vehicle ? 2 : 4),
+      cruise: def.speed ?? null,      // m/s along the patrol, instead of the type's walk speed
+      route: !!def.route,             // one way: at the last point it has got away (escaped)
+      waitFor: def.waitFor ?? null,   // parked until that mission starts (missions.js sets go)
+      go: false, escaped: false,
       x: 0, z: 0, y: 0, yaw: 0, speed: 0, pitch: 0, roll: 0, mult: 1,
       health: 1, status: 'idle', destroyed: false, onFire: false, fireUntil: 0,
       wp: 0, waitUntil: 0, alerted: false, noticeT: 0, reactAfter: 0.6 + rand() * 1.0, calmT: 0,
@@ -367,6 +379,7 @@ export function createEntities(ctx) {
     e.wp = 0; e.waitUntil = time + rand() * 3;
     e.alerted = false; e.noticeT = 0; e.calmT = 0; e.mode = 'patrol'; e.proneUntil = 0;
     e.reactAfter = 0.6 + rand() * 1.0;
+    e.go = false; e.escaped = false;
     e.ride = e.rideSpawn ?? null;
     if (!e.def.vehicle) { e.armed = e.def.variant !== 'officer'; e.helmet = true; e.act = null; e.actUntil = 0; }
     if (e.s) e.s.riding = e.ride ? e.ride.veh.id : null;
@@ -406,7 +419,7 @@ export function createEntities(ctx) {
     if (e.def.vehicle) {
       const v = e.v;
       const burning = e.destroyed ? time < e.fireUntil : v.fire !== 'none';
-      s.status = e.destroyed ? 'destroyed' : (v.abandoned || !v.operational) ? 'disabled' : e.status;
+      s.status = e.destroyed ? 'destroyed' : (v.abandoned || !v.operational) ? 'disabled' : e.escaped ? 'escaped' : e.status;
       s.onFire = burning;
       s.fire = burning ? (v.fire === 'none' ? 'full' : v.fire) : 'none';
       s.smoke = e.destroyed ? (burning ? 'heavy' : 'light') : v.smoke;
@@ -563,18 +576,25 @@ export function createEntities(ctx) {
     e.z = Math.max(-half, Math.min(half, e.z));
   }
 
-  function patrol(e, dt) {
+  function patrol(e, dt, push = 1) {
     const def = e.def;
+    if (e.escaped || (e.waitFor && !e.go)) { steer(e, dt, e.yaw, 0); return; }
     if (!e.patrol || e.patrol.length < 2 || time < e.waitUntil) { steer(e, dt, e.yaw, 0); return; }
     const [tx, tz] = e.patrol[e.wp];
     const dx = tx - e.x, dz = tz - e.z;
-    if (Math.hypot(dx, dz) < (def.vehicle ? 4 : 1.2)) {
-      e.wp = (e.wp + 1) % e.patrol.length;
-      e.waitUntil = time + e.idleTime * (0.6 + rand() * 0.8);
-      steer(e, dt, e.yaw, 0);
-      return;
+    if (Math.hypot(dx, dz) < (def.vehicle ? (e.route ? 10 : 4) : 1.2)) {
+      if (e.route) {
+        // A run down a road: no stops, and past the last point it has got away.
+        if (e.wp === e.patrol.length - 1) { e.escaped = true; e.speed = 0; return; }
+        e.wp++;
+      } else {
+        e.wp = (e.wp + 1) % e.patrol.length;
+        e.waitUntil = time + e.idleTime * (0.6 + rand() * 0.8);
+        steer(e, dt, e.yaw, 0);
+        return;
+      }
     }
-    steer(e, dt, Math.atan2(-dx, -dz), def.walk);
+    steer(e, dt, Math.atan2(-dx, -dz), (e.cruise ?? def.walk) * push);
   }
 
   // How well a unit can move: vehicles by mobility kill, wounded infantry by their legs.
@@ -692,6 +712,8 @@ export function createEntities(ctx) {
       }
       return;
     }
+    // Vehicles on a run keep to the road and put their foot down.
+    if (e.route) { patrol(e, dt, 1.12); e.status = e.speed > 0.3 ? 'fleeing' : 'idle'; return; }
     // Vehicles: trucks and APCs drive off when it gets close, tanks stand and turn the turret.
     const bolt = e.mult > 0 && (e.kind === 'truck' || e.kind === 'light' || (e.kind === 'apc' && dist < 50));
     if (bolt) { steer(e, dt, away, def.run); e.status = 'fleeing'; } else { steer(e, dt, e.yaw, 0); e.status = 'idle'; }
