@@ -8,14 +8,21 @@
 // and loose parts are blown off, tyres burst and burn away, and the ammunition cooks off in pops,
 // tracers and jets of flame.
 //
+// Not every kill burns. The sim's damage model (components, crew, wounds) is shown as it is: a tank
+// whose crew were killed by a jet through the roof sits intact with its hatches open, smoke seeping
+// out and the commander hanging dead over the rim; a thrown track lies behind the hull; a hit gun
+// droops; the engine deck smokes or burns; every hit leaves a scorch or a penetration hole where it
+// struck. Crews ride head-out, duck when alerted and bail out (the sim turns them into infantry).
+//
 // Soldiers (soldierModel.js, soldierAnim.js) are skinned and animated; killed ones crumple or are
-// thrown by the blast, drop their weapon and leave a little blood.
+// thrown by the blast, drop their weapon and leave a little blood. Wounded ones limp, crawl dragging
+// a leg, hold the wound, or lie down writhing, with blood soaking through at the wound.
 import * as THREE from 'three';
 import { mulberry32, hashString } from './rng.js';
 import { canvasTexture } from './textures.js';
-import { HALF_PI, VEHICLE_BUILDERS, buildWheelKits, LINK } from './vehicleModels.js';
+import { Kit, HALF_PI, VEHICLE_BUILDERS, buildWheelKits, LINK } from './vehicleModels.js';
 import { createSoldierFactory, SOLDIER_HEIGHT } from './soldierModel.js';
-import { initSoldierAnim, animateSoldier, killSoldierAnim, landSoldier, animateDeadSoldier } from './soldierAnim.js';
+import { initSoldierAnim, animateSoldier, animateCrew, killSoldierAnim, downSoldierAnim, landSoldier, animateDeadSoldier } from './soldierAnim.js';
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -82,6 +89,35 @@ function makeBloodTexture() {
     const gr = g.createRadialGradient(x, y, 0, x, y, r);
     gr.addColorStop(0, 'rgba(70,8,6,0.9)'); gr.addColorStop(0.7, 'rgba(60,6,4,0.6)'); gr.addColorStop(1, 'rgba(50,5,4,0)');
     g.fillStyle = gr; g.fillRect(0, 0, S, S);
+  }
+  return canvasTexture(c);
+}
+
+// Hull hit marks, alpha in the texture. `hole`: a shaped-charge entry: a small dark hole with a lip
+// of bright melted steel, a ring of burnt paint and soot streaks. Otherwise a blast scorch with
+// fragment pocks.
+function makeHitTexture(hole) {
+  const S = 128, [c, g] = canvas(S), rand = mulberry32(hole ? 91 : 93), m = S / 2;
+  g.clearRect(0, 0, S, S);
+  const soot = g.createRadialGradient(m, m, 0, m, m, m);
+  soot.addColorStop(0, 'rgba(12,11,10,0.95)'); soot.addColorStop(hole ? 0.35 : 0.45, 'rgba(18,16,14,0.8)');
+  soot.addColorStop(hole ? 0.7 : 0.8, 'rgba(30,27,23,0.35)'); soot.addColorStop(1, 'rgba(30,27,23,0)');
+  g.fillStyle = soot; g.fillRect(0, 0, S, S);
+  for (let i = 0; i < (hole ? 40 : 70); i++) {                  // streaks thrown out from the centre
+    const a = rand() * Math.PI * 2, r0 = S * (hole ? 0.08 : 0.12), r1 = S * (0.25 + rand() * 0.24);
+    g.strokeStyle = `rgba(10,9,8,${0.15 + rand() * 0.35})`; g.lineWidth = 1 + rand() * 2.5;
+    g.beginPath(); g.moveTo(m + Math.cos(a) * r0, m + Math.sin(a) * r0); g.lineTo(m + Math.cos(a) * r1, m + Math.sin(a) * r1); g.stroke();
+  }
+  for (let i = 0; i < (hole ? 12 : 45); i++) {                  // fragment pocks with bright bottoms
+    const a = rand() * Math.PI * 2, r = S * (0.1 + rand() * 0.36), x = m + Math.cos(a) * r, y = m + Math.sin(a) * r, d = 1 + rand() * 2.2;
+    g.fillStyle = 'rgba(5,5,5,0.9)'; g.beginPath(); g.arc(x, y, d, 0, Math.PI * 2); g.fill();
+    g.fillStyle = 'rgba(120,115,105,0.6)'; g.beginPath(); g.arc(x + 0.5, y + 0.5, d * 0.4, 0, Math.PI * 2); g.fill();
+  }
+  if (hole) {
+    g.fillStyle = 'rgba(150,140,128,0.9)';                      // melted lip
+    g.beginPath(); for (let k = 0; k <= 20; k++) { const a = k / 20 * Math.PI * 2, r = S * (0.075 + rand() * 0.02); g.lineTo(m + Math.cos(a) * r, m + Math.sin(a) * r); } g.fill();
+    g.fillStyle = 'rgba(0,0,0,1)';
+    g.beginPath(); for (let k = 0; k <= 20; k++) { const a = k / 20 * Math.PI * 2, r = S * (0.05 + rand() * 0.015); g.lineTo(m + Math.cos(a) * r, m + Math.sin(a) * r); } g.fill();
   }
   return canvasTexture(c);
 }
@@ -197,6 +233,16 @@ export function createEntities({ scene, level, smoke, fire }) {
   const bloodMat = std({ map: bloodTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, roughness: 0.35, opacity: 0.8 });
   const bloodGeo = keep(new THREE.PlaneGeometry(1, 1).rotateX(-HALF_PI));
   const chunkGeo = keep(new THREE.BoxGeometry(1, 1, 1));
+  const decalGeo = keep(new THREE.PlaneGeometry(1, 1));
+  const decalMat = (map, o = {}) => std({ map, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4, roughness: 0.9, ...o });
+  const holeDecal = decalMat(keep(makeHitTexture(true)), { metalness: 0.3 });
+  const scorchDecal = decalMat(keep(makeHitTexture(false)), { metalness: 0.2 });
+  const pockDecal = decalMat(scorchDecal.map, { opacity: 0.55 });
+  // Blood soaking through cloth: dark and wet, not bright red.
+  const stainMat = decalMat(bloodTex, { color: 0x4a2a24, roughness: 0.35, polygonOffsetFactor: -6 });
+  const holeDisc = keep(new THREE.CircleGeometry(1, 16).rotateX(-HALF_PI));
+  const holeRect = keep(new THREE.PlaneGeometry(1, 1).rotateX(-HALF_PI));
+  const raycaster = new THREE.Raycaster();
 
   const contactShadow = (w, d, opacity = 0.55) => {
     const m = new THREE.Mesh(shadowGeo, opacity === 0.55 ? shadowMat : shadowMat);
@@ -252,12 +298,37 @@ export function createEntities({ scene, level, smoke, fire }) {
     for (const [name, p] of Object.entries(t.parts ?? {})) {
       const g = p.kit.build(vehicleMats); g.position.fromArray(p.pos); g.name = name; inner.add(g);
     }
+    let tur = null;
     if (t.turret) {
-      const tur = t.turret.kit.build(vehicleMats);
+      tur = t.turret.kit.build(vehicleMats);
       tur.position.fromArray(t.turret.pos); tur.name = 'turret';
       const gun = t.turret.gun.kit.build(vehicleMats); gun.position.fromArray(t.turret.gun.pos); gun.name = 'gun'; tur.add(gun);
       if (t.turret.cage) { const cage = t.turret.cage.kit.build(vehicleMats); cage.position.fromArray(t.turret.cage.pos); cage.name = 'cage'; tur.add(cage); }
       inner.add(tur);
+    }
+    // Hatch lids on hinges, each over a dark opening that shows when it swings open.
+    for (const h of t.hatches ?? []) {
+      const parent = h.on === 'turret' && tur ? tur : inner;
+      const hinge = new THREE.Group();
+      hinge.name = 'hatch:' + h.name;
+      hinge.position.fromArray(h.pos);
+      hinge.rotation.y = Math.atan2(-h.dir[0], -h.dir[1]);
+      const depth = h.r ? h.r * 2 : h.d;
+      const lidKit = new Kit((h.on === 'turret' && t.turret ? t.turret.pos[1] : 0) + h.pos[1]);
+      if (h.r) lidKit.cyl('paint', h.r, h.r * 0.97, 0.05, 0, 0.025, -h.r, 0, 0, 0, 16);
+      else lidKit.box('paint', h.w, 0.05, h.d, 0, 0.025, -h.d / 2);
+      lidKit.box('steel', 0.14, 0.03, 0.03, 0, 0.065, -depth * 0.7);                 // handle
+      lidKit.box('dark', 0.08, 0.05, 0.06, 0, 0.03, -0.02);                          // hinge block
+      const lid = lidKit.build(vehicleMats);
+      lid.name = 'lid';
+      hinge.add(lid);
+      const hole = new THREE.Mesh(h.r ? holeDisc : holeRect, holeMat);
+      hole.userData.slot = 'hole';
+      hole.position.set(0, 0.006, -depth / 2);
+      if (h.r) hole.scale.setScalar(h.r * 0.85); else hole.scale.set(h.w * 0.85, 1, h.d * 0.85);
+      hinge.add(hole);
+      parent.add(hinge);
+      lid.traverse((o) => { if (o.isMesh) disposables.push(o.geometry); });
     }
     trackGeos(body);
     for (const c of root.children) if (c.isMesh) disposables.push(c.geometry);
@@ -297,6 +368,13 @@ export function createEntities({ scene, level, smoke, fire }) {
       tm.material = m;
       v.owned.push(m, m.map);
     }
+    v.hatches = (v.t.hatches ?? []).map((h) => {
+      const hinge = root.getObjectByName('hatch:' + h.name);
+      return { name: h.name, spec: h, hinge, lid: hinge?.getObjectByName('lid'), k: 0 };
+    }).filter((h) => h.lid);
+    v.crewFigs = [];                 // built when first needed
+    v.headOut = v.rand() < 0.5;      // without crew data from the sim: the commander rides head-out
+    v.decals = []; v.innerSmoke = 0; v.thrown = {}; v.hatchAcc = 0; v.fireAcc = 0;
     return v;
   }
 
@@ -307,7 +385,7 @@ export function createEntities({ scene, level, smoke, fire }) {
     sh.material = shadowMat;
     s.root.add(sh);
     scene.add(s.root);
-    return { id: e.id, kind: 'infantry', s, root: s.root, shadow: sh, dead: false, offset: new THREE.Vector3(), owned: [] };
+    return { id: e.id, kind: 'infantry', s, root: s.root, shadow: sh, dead: false, down: false, offset: new THREE.Vector3(), owned: [], stains: {}, trail: 0, last: null };
   }
 
   // Detach a part, keeping its world transform, and send it flying away from `from`.
@@ -361,9 +439,12 @@ export function createEntities({ scene, level, smoke, fire }) {
     }
   }
 
-  function killVehicle(v, e, fresh = true) {
+  function killVehicle(v, e, fresh = true, quiet = false) {
     if (v.dead) return;
     v.dead = true;
+    v.quiet = quiet;
+    for (const f of v.crewFigs) { f.s.root.visible = false; f.k = 0; }
+    if (fresh && !quiet) v.blown = true;    // the blast throws the hatches open
     v.deathT = fresh ? 0 : 1e4;
     const t = v.t, cls = CLASS[v.kind] ?? 1, fuel = v.variant === 'fuel';
     v.burnDur = [55, 80, 100, 130][cls] * (0.8 + v.rand() * 0.4);
@@ -371,8 +452,9 @@ export function createEntities({ scene, level, smoke, fire }) {
     v.owned.push(v.charred);
     v.root.updateMatrixWorld(true);
     v.root.traverse((o) => {
-      if (!o.isMesh || o.userData.shadow) return;
+      if (!o.isMesh || o.userData.shadow || o.userData.decal || o.isSkinnedMesh) return;
       const slot = o.userData.slot;
+      if (slot === 'hole') return;
       if (slot === 'mark') o.visible = false;
       else if (slot === 'glass') o.material = holeMat;
       else if (slot === 'net') o.material = netBurnt;
@@ -380,7 +462,7 @@ export function createEntities({ scene, level, smoke, fire }) {
       else if (slot === 'tyre') o.material = rubberBurnt;
       else o.material = v.charred;
     });
-    knockOffEra(v, fresh);
+    if (!quiet) knockOffEra(v, fresh);
     if (v.gun) v.gun.rotation.x = -0.06 - v.rand() * 0.1; // barrel sags
     v.gunEl = v.gun ? v.gun.rotation.x : 0;
 
@@ -395,14 +477,14 @@ export function createEntities({ scene, level, smoke, fire }) {
     v.burnt = { L: 0, R: 0 };
     v.sinkTarget = 0;
     // Light vehicles and trucks can lose a wheel to the blast.
-    if (fresh && tyres.length && v.rand() < 0.4) {
+    if (fresh && !quiet && tyres.length && v.rand() < 0.4) {
       const w = tyres[Math.floor(v.rand() * tyres.length)];
       burnTyre(v, w, true);
       toss(w, v.root.position, 5, 7);
       tyres = tyres.filter((x) => x !== w);
     }
     tyres.forEach((w, i) => {
-      const burst = fresh && i < 2 && v.rand() < 0.6;
+      const burst = fresh && !quiet && i < 2 && v.rand() < 0.6;
       const at = burst ? 0 : fresh ? rnd(6, v.burnDur * 0.55) : 0;
       v.events.push({ at, fn: () => burnTyre(v, w, burst, !fresh) });
       if (!burst && fresh) v.emit.push({ p: w.position.clone().setY(w.position.y + 0.2), power: 0.55, start: Math.max(0, at - 12), dur: 30, fAcc: 0, sAcc: 0, root: true });
@@ -412,6 +494,12 @@ export function createEntities({ scene, level, smoke, fire }) {
       if (part) v.events.push({ at: fresh ? rnd(2, 7) : 0, fn: () => { part.visible = false; if (fresh) flare(part.getWorldPosition(tmpV), 1.2); } });
     }
     if (!fresh) { for (const ev of v.events) ev.fn(); v.events.length = 0; v.sink = v.sinkTarget; v.tilt = v.tiltTarget; return; }
+    if (quiet) {
+      // Caught fire without blowing up (a fuel or engine fire spreading): no fireball; the rounds
+      // inside start to cook off once it is well alight.
+      if (v.kind === 'tank' || v.kind === 'apc') v.popAt = rnd(10, 25);
+      return;
+    }
 
     // The moment of the kill: flash, fireball, a burst of black smoke, parts and debris thrown.
     const c = v.inner.localToWorld(tmpV.set(0, t.size[1] * 0.6, 0)).clone();
@@ -573,8 +661,9 @@ export function createEntities({ scene, level, smoke, fire }) {
     v.pv += ((tp - v.pitch) * 45 - v.pv * 7) * dt; v.pitch += v.pv * dt;
     v.rv += ((tr - v.rollA) * 45 - v.rv * 7) * dt; v.rollA += v.rv * dt;
     const hum = Math.sin(clock * 47 + v.phase);
-    v.body.rotation.set(v.pitch + 0.0012 * Math.sin(clock * 31 + v.phase), 0, v.rollA);
-    v.body.position.y = v.pivotY + 0.0025 * hum;
+    const running = engineRunning(e);
+    v.body.rotation.set(v.pitch + (running ? 0.0012 * Math.sin(clock * 31 + v.phase) : 0), 0, v.rollA);
+    v.body.position.y = v.pivotY + (running ? 0.0025 * hum : 0);
     // Wheels and tracks, each side at its own speed.
     const halfW = t.size[0] * 0.4;
     v.rollL += (vf - v.yawRate * halfW) * dt;
@@ -595,7 +684,9 @@ export function createEntities({ scene, level, smoke, fire }) {
       v.turret.rotation.y = v.turretYaw;
       if (v.gun) {
         let target = 0;
-        if (drone) {
+        const manned = (e.crewAlive ?? 1) > 0 && e.firepower !== 'disabled' && !e.abandoned;
+        if (v.gunDead) target = v.gunDroop;
+        else if (drone && manned) {
           const l = v.root.worldToLocal(tmpV.copy(drone));
           const dist = Math.hypot(l.x, l.z);
           const maxEl = v.kind === 'tank' ? 0.24 : v.variant === 'btr' ? 1.0 : 1.2;
@@ -607,7 +698,7 @@ export function createEntities({ scene, level, smoke, fire }) {
     }
     // Exhaust: a light haze at idle, a black puff when the driver puts his foot down.
     const hard = v.acc > 0.8;
-    v.exhaustAcc += dt * (1.6 + Math.max(0, v.acc) * 4 + Math.abs(vf) * 0.3);
+    v.exhaustAcc += running ? dt * (1.6 + Math.max(0, v.acc) * 4 + Math.abs(vf) * 0.3) : 0;
     while (v.exhaustAcc > 1) {
       v.exhaustAcc -= 1;
       for (const ex of t.exhaust ?? []) {
@@ -628,7 +719,9 @@ export function createEntities({ scene, level, smoke, fire }) {
       }
     }
     // Damage smoke from the engine bay, thicker as damage grows; small flames when it is bad.
-    const hurt = e.damage ? ({ none: 0, light: 0.35, heavy: 1 }[e.damage] ?? 0) : clamp((0.6 - (e.health ?? 1)) / 0.6, 0, 1);
+    const hurt = e.smoke ? ({ none: 0, light: 0.35, heavy: 1 }[e.smoke] ?? 0)
+      : e.damage ? ({ none: 0, light: 0.35, heavy: 1 }[e.damage] ?? 0)
+      : e.components ? 0 : clamp((0.6 - (e.health ?? 1)) / 0.6, 0, 1);
     if (hurt > 0) {
       const p = v.inner.localToWorld(tmpV.fromArray(t.engine));
       v.smokeAcc += dt * (2 + 8 * hurt);
@@ -636,7 +729,200 @@ export function createEntities({ scene, level, smoke, fire }) {
         v.smokeAcc -= 1;
         const g = 0.2 - 0.12 * hurt;
         smoke.spawn({ pos: [p.x + rnd(-0.3, 0.3), p.y, p.z + rnd(-0.3, 0.3)], vel: [rnd(-0.3, 0.3), rnd(1.5, 3), rnd(-0.3, 0.3)], size: 0.8, grow: 3.5, life: 4.5, drag: 0.5, gravity: -0.2, wind: 1, color: [g, g, g], alpha: 0.3 + 0.35 * hurt, fadeIn: 8 });
-        if (hurt > 0.9 && Math.random() < 0.25) flare(p, 0.5);
+        if (!e.fire && hurt > 0.9 && Math.random() < 0.25) flare(p, 0.5);
+      }
+    }
+  }
+
+  // ---- Damage that doesn't burn: crew, hatches, tracks, guns, hit marks --------------------------------
+
+  function engineRunning(e) {
+    if (e.abandoned || (e.crewTotal > 0 && e.crewAlive === 0)) return false;
+    const en = e.components?.engine;
+    return !en || en.state !== 'destroyed';
+  }
+
+  // Which pose a crew seat shows: 'hatch' / 'driver' / 'gunner' (alive, out), 'slumped' (dead, out),
+  // or null (inside, bailed out, or gone).
+  function crewMode(v, e, spot) {
+    if (v.dead) return null;
+    const m = Array.isArray(e.crew) ? e.crew.find((c) => c.role === spot.role) : null;
+    if (m) {
+      if (m.state === 'bailed' || !m.visible) return null;
+      return m.state === 'dead' ? 'slumped' : spot.mode ?? 'hatch';
+    }
+    if (Array.isArray(e.crew) && spot.mode !== 'gunner') return null;
+    // No crew data: gunners stand at their gun; commanders ride head-out until something happens.
+    if (spot.mode === 'gunner') return (e.health ?? 1) > 0 ? 'gunner' : 'slumped';
+    const calm = !(alerted.has(e.id) && clock - alerted.get(e.id) < 60) && (e.health ?? 1) >= 1 && e.status !== 'fleeing';
+    return spot.role === 'commander' && v.headOut && calm ? 'hatch' : null;
+  }
+
+  function crewFigure(v, spot) {
+    let f = v.crewFigs.find((x) => x.spot === spot);
+    if (f) return f;
+    const parent = spot.on === 'turret' && v.turret ? v.turret : v.inner;
+    const s = soldiers.make('crew', hashString(v.id + spot.role) + 5);
+    initSoldierAnim(s);
+    s.root.position.fromArray(spot.pos);
+    s.root.scale.setScalar(s.scale);
+    s.root.visible = false;
+    parent.add(s.root);
+    f = { spot, s, k: 0, mode: null };
+    v.crewFigs.push(f);
+    return f;
+  }
+
+  function updateCrewAndHatches(v, e, dt) {
+    const want = {};
+    for (const spot of v.t.crew ?? []) {
+      const mode = crewMode(v, e, spot);
+      let f = v.crewFigs.find((x) => x.spot === spot);
+      if (!mode && !f) continue;
+      f ??= crewFigure(v, spot);
+      if (mode) { f.mode = mode; if (spot.hatch) want[spot.hatch] = true; }
+      // Climb up once the hatch is open, duck back down when told to; the dead stay where they fell.
+      const h = v.hatches.find((x) => x.name === spot.hatch);
+      const open = !h || h.k > 0.75;
+      const tk = mode && open ? 1 : 0;
+      f.k += clamp(tk - f.k, -dt * 2.2, dt * 1.6);
+      f.s.root.visible = f.k > 0.02;
+      f.s.root.position.set(spot.pos[0], spot.pos[1] - (1 - f.k) * 0.95 + (f.mode === 'slumped' ? 0.06 : 0), spot.pos[2]);
+      if (f.s.root.visible && dt > 0) {
+        const al = alerted.has(e.id) && clock - alerted.get(e.id) < 60;
+        animateCrew(f.s, { dt, mode: f.mode === 'driver' ? 'hatch' : f.mode, alert: al, seated: spot.mode === 'driver' });
+      }
+    }
+    for (const h of v.hatches) {
+      const open = v.blown || !!e.hatches?.[h.name] || !!want[h.name] || (h.name === 'rear' && e.bailing);
+      h.k += clamp((open ? 1 : 0) - h.k, -dt * 1.2, dt * (v.blown ? 8 : 1.4));
+      const a = h.k * h.k * (3 - 2 * h.k);
+      h.lid.rotation.x = a * (h.spec.r ? 1.95 : 1.75);
+    }
+  }
+
+  // Thrown track: the belt comes off and lies in a crumpled run behind the hull on that side.
+  function throwTrack(v, side) {
+    v.thrown[side] = true;
+    const belt = v.tracks.find((t) => t.name === 'track' + side);
+    if (belt) belt.visible = false;
+    const sz = v.t.size, w = sz[0] * 0.16, len = sz[2] * 0.9;
+    const g = new THREE.PlaneGeometry(w, len, 1, 28).rotateX(-HALF_PI);
+    const pos = g.attributes.position, uv = g.attributes.uv;
+    for (let i = 0; i < pos.count; i++) {
+      const z = pos.getZ(i);
+      pos.setY(i, 0.04 + Math.max(0, Math.sin(z * 1.7 + side.length) * 0.06) + (z < -len * 0.3 ? 0.2 * ((-len * 0.3 - z) / len) : 0));
+      pos.setX(i, pos.getX(i) + Math.sin(z * 0.8) * 0.12);
+      uv.setY(i, uv.getY(i) * len / LINK);
+    }
+    g.computeVertexNormals();
+    const mat = trackMat.clone();
+    const m = new THREE.Mesh(g, mat);
+    m.userData.slot = 'trackL';
+    v.owned.push(mat);
+    m.castShadow = m.receiveShadow = true;
+    const sx = side === 'L' ? -1 : 1;
+    m.position.set(sx * (sz[0] / 2 - w / 2), 0, sz[2] * 0.42);
+    m.rotation.y = sx * 0.12;
+    v.root.add(m);
+    v.owned.push(g);
+    const p = v.root.localToWorld(tmpV.set(sx * sz[0] * 0.5, 0.4, 0)).clone();
+    sparks(p, 12, 6);
+    smoke.spawn({ pos: [p.x, p.y, p.z], vel: [0, 0.8, 0], size: 1.4, grow: 2, life: 2.5, drag: 2, wind: 1, color: [0.3, 0.27, 0.22], alpha: 0.45 });
+  }
+
+  // Shows the components' state: thrown tracks, a drooping gun, flat tyres, smoke seeping from open
+  // hatches after a penetration, and an engine fire that is not (yet) the whole vehicle burning.
+  function damageLook(v, e, dt) {
+    const c = e.components;
+    if (c) {
+      for (const side of ['L', 'R']) if (c['track' + side]?.state === 'destroyed' && !v.thrown[side]) throwTrack(v, side);
+      if (c.gun?.state === 'destroyed' && !v.gunDead && v.gun) {
+        v.gunDead = true; v.gunDroop = -0.06 - v.rand() * 0.06;
+        v.gun.rotation.y = (v.rand() - 0.5) * 0.06;
+      }
+      if (c.wheels?.state === 'destroyed' && !v.flat) {
+        v.flat = true;
+        const tyres = v.wheels.filter((w) => w.userData.type === 'tyre');
+        const w = tyres[Math.floor(v.rand() * tyres.length)];
+        if (w) { w.position.y -= w.userData.r * 0.18; v.tiltTarget = 0.025 * w.userData.side; v.sinkTarget = 0.04; }
+      }
+    }
+    // Smoke from inside after a penetration or a crew kill, out of whatever is open.
+    if ((e.kill === 'crew' || (e.crewTotal > 0 && e.crewAlive === 0)) && v.innerSmoke < 0.35 && !v.crewSmoked) { v.crewSmoked = true; v.innerSmoke = 0.8; }
+    v.innerSmoke = Math.max(0, v.innerSmoke - dt / 140);
+    if (v.innerSmoke > 0.01) {
+      v.hatchAcc += dt * 5 * v.innerSmoke;
+      while (v.hatchAcc > 1) {
+        v.hatchAcc -= 1;
+        const open = v.hatches.filter((h) => h.k > 0.3);
+        if (!open.length) break;
+        const h = open[Math.floor(Math.random() * open.length)];
+        const p = h.hinge.localToWorld(tmpV.set(0, 0.1, -(h.spec.r ?? h.spec.d / 2)));
+        const g = rnd(0.16, 0.26);
+        smoke.spawn({ pos: [p.x, p.y, p.z], vel: [rnd(-0.2, 0.2), rnd(0.8, 1.6), rnd(-0.2, 0.2)], size: 0.35, grow: 2.2, life: rnd(3, 5), drag: 0.8, gravity: -0.15, wind: 1, color: [g, g, g * 1.04], alpha: 0.32 * Math.min(1, v.innerSmoke * 2), fadeIn: 10 });
+      }
+    }
+    // Engine fire: flames through the deck grilles, black smoke, the glow on the hull.
+    let glow = 0;
+    if (e.fire === 'engine') {
+      const p = v.inner.localToWorld(tmpV.fromArray(v.t.engine));
+      glow = 0.6 + 0.15 * Math.sin(clock * 9 + v.phase);
+      v.fireAcc += dt * 12;
+      while (v.fireAcc > 1) {
+        v.fireAcc -= 1;
+        fire.spawn({ pos: [p.x + rnd(-0.5, 0.5), p.y + 0.05, p.z + rnd(-0.5, 0.5)], vel: [rnd(-0.3, 0.3), rnd(1.2, 2.8), rnd(-0.3, 0.3)], size: rnd(0.35, 0.8), grow: 0.5, life: rnd(0.35, 0.7), drag: 1, wind: 0.4, color: [2.3, 1.05, 0.3], colorEnd: [0.5, 0.09, 0.02], alpha: 0.85, fadeIn: 20 });
+        if (Math.random() < 0.3) {
+          const g = rnd(0.03, 0.06);
+          smoke.spawn({ pos: [p.x + rnd(-0.3, 0.3), p.y + 0.4, p.z + rnd(-0.3, 0.3)], vel: [rnd(-0.3, 0.3), rnd(2.5, 4), rnd(-0.3, 0.3)], size: rnd(0.8, 1.3), grow: 4, life: rnd(8, 11), drag: 0.2, gravity: -0.15, wind: 1.1, color: [g, g, g], alpha: 0.7, fadeIn: 6 });
+        }
+      }
+    }
+    return glow;
+  }
+
+  // A mark where a hit struck the hull: a penetration hole, a blast scorch or fragment pocks. The
+  // sim gives the point and normal in the hull's frame; the mark goes onto the drawn surface there.
+  function hullMark(v, e, ev) {
+    const q = tmpQ.fromArray(e.quaternion);
+    let p, n;
+    if (ev.localPosition) {
+      p = new THREE.Vector3().fromArray(ev.localPosition).applyQuaternion(q).add(tmpV.fromArray(e.position));
+      n = new THREE.Vector3().fromArray(ev.localNormal ?? [0, 1, 0]).applyQuaternion(q).normalize();
+    } else {
+      p = new THREE.Vector3().fromArray(ev.position);
+      n = p.clone().sub(v.inner.localToWorld(tmpV.set(0, v.t.size[1] * 0.5, 0))).normalize();
+    }
+    v.root.updateMatrixWorld(true);
+    raycaster.set(tmpV2.copy(p).addScaledVector(n, 1.2), tmpV3.copy(n).negate());
+    raycaster.far = 3;
+    const hits = raycaster.intersectObject(v.root, true).filter((h) => h.object.isMesh && !h.object.isSkinnedMesh && !h.object.userData.shadow && !h.object.userData.decal && h.object.userData.slot !== 'hole' && h.object.visible);
+    let target = v.inner, at = p, nw = n;
+    if (hits.length) {
+      const h = hits[0];
+      target = h.object; at = h.point;
+      if (h.face) nw = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+    }
+    const jet = ev.penetrated || ev.source === 'jet';
+    const mat = jet ? holeDecal : ev.source === 'fragments' ? pockDecal : scorchDecal;
+    const size = jet ? rnd(0.3, 0.42) : ev.source === 'fragments' ? rnd(0.5, 0.8) : rnd(0.8, 1.2);
+    const d = new THREE.Mesh(decalGeo, mat);
+    d.userData.decal = true;
+    d.position.copy(at).addScaledVector(nw, 0.005);
+    d.quaternion.setFromUnitVectors(tmpV.set(0, 0, 1), nw);
+    d.rotateZ(Math.random() * Math.PI * 2);
+    d.scale.setScalar(size);
+    scene.add(d);
+    target.attach(d);
+    v.decals.push(d);
+    if (v.decals.length > 14) { const old = v.decals.shift(); old.parent?.remove(old); }
+    if (jet) {
+      // The jet went in: a puff of smoke and dust out of every opening.
+      v.innerSmoke = Math.max(v.innerSmoke, 0.6);
+      for (const h of v.hatches) if (h.k > 0.3) {
+        const hp = h.hinge.localToWorld(tmpV.set(0, 0.1, -(h.spec.r ?? h.spec.d / 2)));
+        for (let i = 0; i < 3; i++) smoke.spawn({ pos: [hp.x, hp.y, hp.z], vel: [rnd(-0.5, 0.5), rnd(2, 4), rnd(-0.5, 0.5)], size: 0.5, grow: 3, life: 2.5, drag: 1.5, wind: 1, color: [0.22, 0.21, 0.2], alpha: 0.5 });
+        sparks(hp, 6, 6);
       }
     }
   }
@@ -652,6 +938,7 @@ export function createEntities({ scene, level, smoke, fire }) {
   function killSoldier(v, e) {
     v.dead = true;
     const s = v.s, rand = mulberry32(hashString(e.id) + 13);
+    if (v.down) { s.st.dead.alive = false; return; }   // died where he lay
     // A close blast throws the body; one farther off just knocks it down.
     let push = null;
     for (const b of blasts) {
@@ -672,20 +959,73 @@ export function createEntities({ scene, level, smoke, fire }) {
     bloodMist([e.position[0], e.position[1] + 1.1, e.position[2]], push ? 6 : 3);
   }
 
-  function addPool(x, z, size) {
+  function addPool(x, z, size, grow = 10) {
     const m = new THREE.Mesh(bloodGeo, bloodMat);
     m.position.set(x, level.terrain.heightAt(x, z) + 0.03, z);
     m.rotation.y = Math.random() * Math.PI * 2;
     m.scale.setScalar(0.01);
-    m.userData = { target: size, t: 0 };
+    m.userData = { target: size, t: 0, grow };
     scene.add(m);
     pools.push(m);
+    if (pools.length > 160) scene.remove(pools.shift());
+  }
+
+  // Blood soaking through the uniform at a wound, stuck to the bone so it moves with the limb.
+  const STAIN_AT = {
+    torso: ['chest', [0, -0.1, -0.6], [0, 0, 1]], head: null,
+    armL: ['armL', [0, -0.14, -0.5], [0, 0, 1]], armR: ['armR', [0, -0.14, -0.5], [0, 0, 1]],
+    legL: ['thighL', [0, -0.2, -0.6], [0, 0, 1]], legR: ['thighR', [0, -0.2, -0.6], [0, 0, 1]],
+  };
+  function stain(v, part, severity) {
+    const at = STAIN_AT[part];
+    if (!at || v.stains[part]) return;
+    v.stains[part] = true;
+    const s = v.s, bone = s.bones[at[0]];
+    s.root.updateMatrixWorld(true);
+    const o = bone.localToWorld(new THREE.Vector3(at[1][0] + (Math.random() - 0.5) * 0.06, at[1][1] + (Math.random() - 0.5) * 0.08, at[1][2]));
+    const dir = new THREE.Vector3(...at[2]).transformDirection(bone.matrixWorld);
+    s.body.boundingSphere = null;
+    raycaster.set(o, dir); raycaster.far = 1;
+    const hit = raycaster.intersectObject(s.root, true).find((h) => h.object.isMesh && !h.object.userData.decal && !h.object.userData.shadow);
+    const d = new THREE.Mesh(decalGeo, stainMat);
+    d.userData.decal = true;
+    const nrm = hit?.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : dir.clone().negate();
+    d.position.copy(hit ? hit.point : bone.getWorldPosition(new THREE.Vector3())).addScaledVector(nrm, 0.004);
+    d.quaternion.setFromUnitVectors(tmpV.set(0, 0, 1), nrm);
+    d.rotateZ(Math.random() * Math.PI * 2);
+    d.scale.setScalar(0.09 + 0.12 * severity);
+    scene.add(d);
+    bone.attach(d);           // keeps the world placement, then follows the limb
+  }
+  function woundStains(v, e) {
+    const w = e.wounds;
+    if (!w) return;
+    for (const part of ['torso', 'armL', 'armR', 'legL', 'legR']) if ((w[part] ?? 1) < 0.85) stain(v, part, clamp(1 - w[part], 0.2, 1));
   }
 
   function updateSoldier(v, e, dt, speed, drone) {
     const s = v.s;
     const sc = s.scale * clamp((e.size?.[1] ?? SOLDIER_HEIGHT) / SOLDIER_HEIGHT, 0.85, 1.15);
     s.root.scale.setScalar(sc);
+    if (dt > 0) woundStains(v, e);
+    // Down: collapses where he stands, drops the weapon and lies writhing (and bleeding).
+    if (e.status === 'down' && !v.down && !v.dead) {
+      v.down = true;
+      s.root.position.fromArray(e.position);
+      s.root.quaternion.fromArray(e.quaternion);
+      downSoldierAnim(s);
+      toss(s.weapon, new THREE.Vector3().fromArray(e.position), 1.2, 1.2, 1);
+    }
+    if (v.down && !v.dead) {
+      s.root.position.fromArray(e.position).add(v.offset);
+      if (dt > 0) animateDeadSoldier(s, dt);
+      if (!v.pooled && e.bleeding !== false && s.st.dead.t > 2) {
+        v.pooled = true;
+        s.bones.chest.getWorldPosition(tmpV);
+        addPool(tmpV.x, tmpV.z, 0.5 + Math.random() * 0.4, 40);
+      }
+      return;
+    }
     if (v.dead) {
       if (v.fly) {
         // Thrown: a ballistic arc, then a thud.
@@ -703,7 +1043,7 @@ export function createEntities({ scene, level, smoke, fire }) {
       if (dt > 0) animateDeadSoldier(s, dt);
       v.shadow.visible = !v.fly;
       const d = s.st.dead;
-      if (!v.pooled && d.landed && d.t > 0.8) {
+      if (!v.pooled && d.landed && (d.t > 0.8 || v.down)) {
         v.pooled = true;
         s.bones.chest.getWorldPosition(tmpV);
         addPool(tmpV.x, tmpV.z, 0.45 + Math.random() * 0.35);
@@ -713,17 +1053,27 @@ export function createEntities({ scene, level, smoke, fire }) {
     s.root.position.fromArray(e.position);
     s.root.quaternion.fromArray(e.quaternion);
     const al = alerted.has(e.id) && clock - alerted.get(e.id) < 60 ? 1 : 0;
-    if (dt > 0) animateSoldier(s, { dt, speed, status: e.status, drone, alert: al });
+    if (dt > 0) animateSoldier(s, { dt, speed, status: e.status, drone, alert: al, wounds: e.wounds });
+    // A bleeding man leaves a trail of drops.
+    if (e.bleeding && dt > 0) {
+      v.trail += speed * dt;
+      if (v.trail > 0.9) { v.trail = 0; addPool(e.position[0] + rnd(-0.2, 0.2), e.position[2] + rnd(-0.2, 0.2), rnd(0.1, 0.22), 1); }
+    }
     v.shadow.scale.set(0.9, 1, 0.9 + s.st.p * 0.5);
   }
 
   // ---- Events and the frame -------------------------------------------------------------------------
 
-  function hit(ev) {
+  function hit(ev, byId) {
     const p = ev.position;
-    const v = live.get(ev.entityId);
-    if (v && v.kind === 'infantry') { bloodMist(p, 3); return; }
-    sparks({ x: p[0], y: p[1], z: p[2] }, ev.weakSpot ? 40 : 18, 16);
+    const v = live.get(ev.entityId), e = byId.get(ev.entityId);
+    if (v && v.kind === 'infantry') {
+      bloodMist(p, 3);
+      if (ev.bodyPart && !v.dead) stain(v, ev.bodyPart, clamp((ev.damage ?? 0.3) * 2, 0.3, 1));
+      return;
+    }
+    if (v && e && !v.dead) hullMark(v, e, ev);
+    sparks({ x: p[0], y: p[1], z: p[2] }, ev.weakSpot || ev.penetrated ? 40 : 18, 16);
     for (let i = 0; i < 5; i++) smoke.spawn({ pos: p, vel: [(Math.random() - 0.5) * 3, 1 + Math.random() * 2, (Math.random() - 0.5) * 3], size: 0.8, grow: 2.5, life: 1.8, drag: 2, color: [0.2, 0.19, 0.17], alpha: 0.5, wind: 0.6 });
   }
 
@@ -745,7 +1095,7 @@ export function createEntities({ scene, level, smoke, fire }) {
     const byId = new Map(ents.map((e) => [e.id, e]));
     const drone = state.drone && !state.drone.destroyed && state.drone.position ? dronePos.fromArray(state.drone.position) : null;
     for (const ev of events) {
-      if (ev.type === 'hit') hit(ev);
+      if (ev.type === 'hit') hit(ev, byId);
       else if (ev.type === 'entity_alerted') alerted.set(ev.entityId, clock);
       else if (ev.type === 'explosion') {
         blasts.push({ pos: ev.position, radius: ev.radius, time: clock });
@@ -778,7 +1128,8 @@ export function createEntities({ scene, level, smoke, fire }) {
     for (const e of ents) {
       seen.add(e.id);
       let v = live.get(e.id);
-      if (v && v.dead && e.status !== 'destroyed') { remove(e.id, v); v = null; } // came back to life
+      const alive = ['idle', 'moving', 'fleeing', 'prone', 'wounded', 'crawling', undefined].includes(e.status);
+      if (v && (v.dead || v.down) && alive) { remove(e.id, v); v = null; } // came back to life (respawned)
       if (!v) {
         v = e.kind === 'infantry' ? createSoldier(e) : createVehicle(e);
         live.set(e.id, v);
@@ -805,6 +1156,8 @@ export function createEntities({ scene, level, smoke, fire }) {
       }
 
       if (e.status === 'destroyed' && !v.dead) killVehicle(v, e, true);
+      // Burning without having blown up: the fire takes hold quietly.
+      if (e.fire === 'full' && !v.dead) killVehicle(v, e, true, true);
       v.sink += (v.sinkTarget - v.sink) * Math.min(1, dt * 0.4);
       v.tilt += (v.tiltTarget - v.tilt) * Math.min(1, dt * 0.4);
       v.root.position.fromArray(e.position);
@@ -814,7 +1167,16 @@ export function createEntities({ scene, level, smoke, fire }) {
       const sz = v.t.size;
       if (e.size) v.root.scale.set(clamp(e.size[0] / sz[0], 0.85, 1.15), clamp(e.size[1] / sz[1], 0.85, 1.15), clamp(e.size[2] / sz[2], 0.85, 1.15));
       v.root.updateMatrixWorld(true);
-      if (!v.dead) { if (dt > 0) driveVehicle(v, e, dt, drone); continue; }
+      if (!v.dead) {
+        if (dt > 0) {
+          driveVehicle(v, e, dt, drone);
+          const glow = damageLook(v, e, dt);
+          if (glow > 0) burning.push({ v, glow });
+        }
+        updateCrewAndHatches(v, e, dt);
+        continue;
+      }
+      updateCrewAndHatches(v, e, dt);
       v.body.rotation.set(0, 0, 0);
       v.body.position.y = v.pivotY;
       if (dt > 0) {
@@ -852,7 +1214,7 @@ export function createEntities({ scene, level, smoke, fire }) {
     }
     for (const p of pools) {
       const u = p.userData;
-      if (u.t < 1) { u.t = Math.min(1, u.t + dt / 10); p.scale.setScalar(u.target * Math.sqrt(u.t)); }
+      if (u.t < 1) { u.t = Math.min(1, u.t + dt / (u.grow ?? 10)); p.scale.setScalar(u.target * Math.sqrt(u.t)); }
     }
   }
 

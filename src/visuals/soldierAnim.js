@@ -2,6 +2,8 @@
 // (passing through a kneel on the way down), walk and run gaits, crawling, breathing and looking
 // around, turning to aim at the drone, two-bone arm IK onto the weapon, and deaths: a crumple that
 // falls under gravity, or a body thrown by a blast that tumbles, flails and lands in a sprawl.
+// Wounded men limp on a hurt leg, drag it when crawling, press a hand on the wound, or go down and
+// writhe. Vehicle crew stand head-out in a hatch, man a pintle gun, or hang dead over the rim.
 import * as THREE from 'three';
 import { JOINTS } from './soldierModel.js';
 
@@ -28,6 +30,20 @@ const DEATHS = [
   pose({ face: -1, hipsY: 0.15, hipsX: 1.45, hipsYaw: -0.3, hipsZ: 0.1, spineX: -0.1, neckX: 0.1, neckY: -0.5, thighRX: 0.9, thighRZ: 0.35, kneeR: -1.3, thighLX: 0.3, thighLZ: 0.15, kneeL: -0.5, footR: 0.3, armRX: -0.1, armRZ: 0.5, foreR: 0.25, armLX: 0.3, armLZ: 1.3, foreL: 0.3 }),
 ];
 DEATHS[0].face = 1; DEATHS[1].face = -1; DEATHS[2].face = 0; DEATHS[3].face = 1; DEATHS[4].face = 1; DEATHS[5].face = -1;
+
+// Alive but down: on the back with a knee drawn up and a hand on the belly, curled on the side, or
+// sitting hunched over the wound.
+const DOWN = [
+  pose({ hipsY: 0.13, hipsX: 1.5, spineX: -0.05, neckX: -0.25, headY: 0.3, thighRX: 0.9, thighRZ: 0.15, kneeR: -1.4, footR: 0.3, thighLX: 0.25, thighLZ: 0.1, kneeL: -0.3, armRX: -0.2, armRZ: 0.9, foreR: 0.6, armLX: 0.55, armLZ: 0.2, foreL: 1.8 }),
+  pose({ hipsY: 0.2, hipsYaw: 0.3, hipsZ: 1.45, spineX: -0.45, chestX: -0.35, neckX: -0.45, thighRX: 1.3, kneeR: -1.7, thighLX: 1.0, thighLZ: 0.1, kneeL: -1.4, armRX: 0.7, armRZ: 0.1, foreR: 1.9, armLX: 0.8, armLZ: -0.1, foreL: 1.8 }),
+  pose({ hipsY: 0.16, spineX: -0.3, chestX: -0.25, neckX: -0.35, headX: -0.1, thighRX: 1.5, thighRZ: 0.12, kneeR: -0.25, thighLX: 1.35, thighLZ: 0.2, kneeL: -0.8, footR: -0.3, armRX: 0.65, armRZ: 0.1, foreR: 1.5, armLX: 0.75, armLZ: 0.05, foreL: 1.3 }),
+];
+// Crew in a vehicle: head and shoulders out of a hatch with the elbows on the rim, standing at a
+// pintle gun, or dead and folded over the hatch rim with the arms hanging.
+const HATCH = pose({ hipsY: 0.96, spineX: 0.02, chestX: -0.05, armRX: 0.55, armRZ: 0.8, foreR: 1.8, armLX: 0.55, armLZ: 0.8, foreL: 1.8, thighRZ: 0.03, thighLZ: 0.03 });
+const GUNNER = pose({ hipsY: 0.94, spineX: -0.1, chestX: -0.05, armRX: 1.2, armRZ: 0.12, foreR: 0.6, armLX: 1.2, armLZ: 0.12, foreL: 0.6, kneeR: -0.15, kneeL: -0.1, thighRX: 0.1, thighLX: -0.05 });
+const SEATED = { thighRX: 1.45, thighLX: 1.45, thighRZ: 0.08, thighLZ: 0.08, kneeR: -1.35, kneeL: -1.35, footR: 0.2, footL: 0.2, spineX: 0.12 };
+const SLUMP = pose({ hipsY: 0.96, spineX: -0.15, chestX: -1.0, neckX: -0.5, headX: -0.35, armRX: 1.3, armRZ: 0.2, foreR: 0.25, armLX: 1.1, armLZ: 0.35, foreL: 0.5 });
 
 // Weapon holds in the chest bone's space. `aim` puts the butt in the shoulder pocket.
 const E = (x, y, z, o) => new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z, o));
@@ -111,11 +127,17 @@ function reach(s, n, target, pole, handQ, scale) {
 }
 
 // Per frame for a living soldier. `drone` is the drone's world position (or null), `alert` 0..1.
-export function animateSoldier(s, { dt, speed, status, drone, alert }) {
+export function animateSoldier(s, { dt, speed, status, drone, alert, wounds }) {
   const st = s.st, P = st.cur;
   st.t += dt;
+  if (s.wpivot && !s.wpivot.visible) s.wpivot.visible = true;
+  // Wounds: 1 = unhurt .. 0 = destroyed. A hurt leg limps (or is dragged when crawling).
+  const W = wounds ?? null;
+  const hurtR = W ? clamp((1 - (W.legR ?? 1)) * 1.4, 0, 1) : 0, hurtL = W ? clamp((1 - (W.legL ?? 1)) * 1.4, 0, 1) : 0;
+  const crawling = status === 'crawling';
   // Stance: 0 stand, 1 kneel, 2 prone. Going down passes through the kneel.
-  const target = status === 'prone' ? 2 : status === 'idle' && st.kneel ? 1 : 0;
+  const kneelIdle = (status === 'idle' && st.kneel) || (status === 'wounded' && speed < 0.15 && (hurtR + hurtL > 0.5 || (W && (W.torso ?? 1) < 0.6)));
+  const target = status === 'prone' || crawling ? 2 : kneelIdle ? 1 : 0;
   st.p += clamp(target - st.p, -dt * 1.1, dt * 1.5);
   if (st.p < 1) for (const k of KEYS) P[k] = lerp(STAND[k], KNEEL[k], st.p);
   else for (const k of KEYS) P[k] = lerp(KNEEL[k], PRONE[k], st.p - 1);
@@ -138,15 +160,22 @@ export function animateSoldier(s, { dt, speed, status, drone, alert }) {
   st.walkK += (clamp(speed / 1.3, 0, 1) * stand - st.walkK) * Math.min(1, dt * 6);
   st.runK += (clamp((speed - 2.0) / 2, 0, 1) * stand - st.runK) * Math.min(1, dt * 4);
   const wk = st.walkK, rk = st.runK;
-  if (st.p < 1.5) st.phase += dt * TAU * speed / lerp(1.45, 2.6, rk);
+  // A limp: the weight comes off the hurt leg quickly (its stance is short), the hips drop on it and
+  // it swings stiffly.
+  const stanceR = Math.max(0, -Math.sin(st.phase)), stanceL = Math.max(0, Math.sin(st.phase));
+  const hurry = 1 + 0.8 * (hurtR * stanceR + hurtL * stanceL);
+  if (st.p < 1.5) st.phase += dt * TAU * speed / lerp(1.45, 2.6, rk) * hurry;
   for (const [n, off] of [['R', 0], ['L', Math.PI]]) {
-    const ph = st.phase + off;
-    P['thigh' + n + 'X'] += wk * (0.05 + 0.1 * rk + lerp(0.42, 0.75, rk) * Math.sin(ph));
-    P['knee' + n] -= wk * (0.08 + 0.15 * rk + lerp(0.95, 1.6, rk) * Math.max(0, Math.sin(ph + 1.97)) ** 1.6);
-    P['foot' + n] += wk * (0.25 * Math.max(0, Math.sin(ph - 1.6)) - 0.2 * Math.max(0, Math.sin(ph + 2.4)));
+    const ph = st.phase + off, h = n === 'R' ? hurtR : hurtL;
+    P['thigh' + n + 'X'] += wk * (0.05 + 0.1 * rk + lerp(0.42, 0.75, rk) * (1 - 0.45 * h) * Math.sin(ph));
+    P['knee' + n] -= wk * (0.08 + 0.15 * rk + lerp(0.95, 1.6, rk) * (1 - 0.75 * h) * Math.max(0, Math.sin(ph + 1.97)) ** 1.6);
+    P['foot' + n] += wk * (0.25 * Math.max(0, Math.sin(ph - 1.6)) - 0.2 * Math.max(0, Math.sin(ph + 2.4))) * (1 - 0.6 * h);
     P['arm' + n + 'X'] += wk * (n === 'R' ? -1 : 1) * Math.sin(st.phase) * lerp(0.3, 0.7, rk);
     P['fore' + n] += wk * lerp(0.15, 0.9, rk);
   }
+  P.hipsY -= wk * 0.06 * (hurtR * stanceR + hurtL * stanceL);
+  P.hipsZ += wk * 0.09 * (hurtR * stanceR - hurtL * stanceL);
+  P.chestX -= wk * 0.12 * Math.max(hurtR, hurtL);
   P.hipsY += wk * ((0.016 + 0.03 * rk) * Math.cos(2 * st.phase) - 0.05 * rk);
   P.hipsYaw += wk * 0.1 * Math.sin(st.phase);
   P.hipsZ += wk * 0.04 * Math.sin(st.phase);
@@ -158,10 +187,12 @@ export function animateSoldier(s, { dt, speed, status, drone, alert }) {
   st.crawl += ((st.p > 1.6 && moving ? 1 : 0) - st.crawl) * Math.min(1, dt * 4);
   if (st.crawl > 0.01) {
     if (moving) st.phase += dt * TAU * speed / 0.7;
-    const c = st.crawl, sn = Math.sin(st.phase);
-    P.thighRZ += c * (0.25 + 0.3 * sn); P.thighLZ += c * (0.25 - 0.3 * sn);
-    P.thighRX += c * 0.3 * Math.max(0, sn); P.thighLX += c * 0.3 * Math.max(0, -sn) - 0.3 * c;
-    P.kneeR -= c * 0.9 * Math.max(0, sn); P.kneeL -= c * (0.9 * Math.max(0, -sn) - 0.5);
+    const c = st.crawl, sn = Math.sin(st.phase), gR = 1 - hurtR, gL = 1 - hurtL;
+    // A hurt leg is dragged straight; the good one and the elbows do the work.
+    P.thighRZ += c * (0.25 + 0.3 * sn * gR); P.thighLZ += c * (0.25 - 0.3 * sn * gL);
+    P.thighRX += c * 0.3 * Math.max(0, sn) * gR; P.thighLX += c * (0.3 * Math.max(0, -sn) - 0.3) * gL;
+    P.kneeR -= c * 0.9 * Math.max(0, sn) * gR; P.kneeL -= c * (0.9 * Math.max(0, -sn) - 0.5) * gL;
+    P.chestX += c * 0.06 * Math.abs(sn) * (hurtR + hurtL);
     P.hipsZ += c * 0.08 * sn; P.chestY += c * 0.12 * sn;
   }
   // Idle life: breathing, weight shift, glancing around.
@@ -172,9 +203,19 @@ export function animateSoldier(s, { dt, speed, status, drone, alert }) {
   const L = st.look;
   if (st.t > L.next) { L.next = st.t + 1.5 + s.rand() * 3.5; L.ty = (s.rand() - 0.5) * 1.4; L.tp = (s.rand() - 0.6) * 0.3; }
 
+  // Holding a wound with the left hand: the torso or the right arm, or a leg when kneeling.
+  let woundAt = null;
+  if (W && (status === 'wounded' || crawling)) {
+    if ((W.torso ?? 1) < 0.8) woundAt = ['chest', 0.05, -0.14, -0.2];
+    else if ((W.armR ?? 1) < 0.8) woundAt = ['armR', 0.01, -0.15, -0.06];
+    else if (st.p > 0.6 && st.p < 1.4 && Math.max(hurtR, hurtL) > 0.2) woundAt = [hurtR >= hurtL ? 'thighR' : 'thighL', 0, -0.22, -0.1];
+  }
+  st.holdK = (st.holdK ?? 0) + ((woundAt && !(engaged && (W.armL ?? 1) > 0.5 && st.t % 9 < 5) ? 1 : 0) - (st.holdK ?? 0)) * Math.min(1, dt * 3);
+  if (woundAt) st.woundAt = woundAt;
+
   // Aim at the drone when it is close or they have been alerted; officers raise binoculars.
   const canAim = !s.officer;
-  const aimT = canAim && rk < 0.4 && (engaged || st.p > 1.5) ? 1 : 0;
+  const aimT = canAim && rk < 0.4 && (engaged || st.p > 1.5) ? 1 - st.holdK : 0;
   st.aimK += (aimT - st.aimK) * Math.min(1, dt * 3);
   const binT = s.officer && engaged && !moving ? 1 : 0;
   st.binos += (binT - st.binos) * Math.min(1, dt * 3);
@@ -243,7 +284,42 @@ export function animateSoldier(s, { dt, speed, status, drone, alert }) {
   _pole.set(1, -0.7, 0.25).applyQuaternion(chestQ);
   reach(s, 'R', tR, _pole, _q.copy(_qw).multiply(handR), scale);
   _pole.set(-0.5, -1, 0.1).applyQuaternion(chestQ);
-  reach(s, 'L', tL, _pole, _q.copy(_qw).multiply(handL), scale);
+  if (st.holdK > 0.02 && st.woundAt) {
+    const [bone, x, y, z] = st.woundAt;
+    tL.lerp(s.bones[bone].localToWorld(_v.set(x, y, z)), st.holdK);
+    reach(s, 'L', tL, _pole, st.holdK > 0.5 ? chestQ : _q.copy(_qw).multiply(handL), scale);
+  } else reach(s, 'L', tL, _pole, _q.copy(_qw).multiply(handL), scale);
+}
+
+// ---- Vehicle crew -------------------------------------------------------------------------------
+
+// `mode`: 'hatch' (head out, looking around), 'gunner' (at a pintle gun), 'slumped' (dead over the rim).
+// `seated`: a driver, legs forward.
+export function animateCrew(s, { dt, mode, alert, seated }) {
+  const st = s.st;
+  st.t += dt;
+  if (s.wpivot) s.wpivot.visible = false;
+  if (s.binos) s.binos.visible = false;
+  const T = mode === 'slumped' ? SLUMP : mode === 'gunner' ? GUNNER : HATCH;
+  const P = (st.crewP ??= { ...T }), Q = (st.crewQ ??= { ...T });
+  const k = 1 - Math.exp(-dt * (mode === 'slumped' ? 2.5 : 5));
+  for (const key of KEYS) { P[key] += ((seated && key in SEATED ? SEATED[key] + (key === 'spineX' ? T.spineX : 0) : T[key]) - P[key]) * k; Q[key] = P[key]; }
+  st.side ??= (s.rand() - 0.5) * 0.9;
+  if (mode === 'slumped') {
+    Q.hipsYaw += st.side; Q.spineY += st.side * 0.5; Q.hipsZ += st.side * 0.15; Q.neckY += st.side;
+  } else {
+    // Scanning the ground and the sky; an alerted man watches the sky.
+    const L = st.look;
+    if (st.t > L.next) { L.next = st.t + 1.2 + s.rand() * 3; L.ty = (s.rand() - 0.5) * (mode === 'gunner' ? 1.2 : 2.4); L.tp = (s.rand() - 0.4) * 0.4 + (alert ? 0.45 : 0); }
+    L.yaw += (L.ty - L.yaw) * Math.min(1, dt * 3);
+    L.pitch += (L.tp - L.pitch) * Math.min(1, dt * 3);
+    Q.chestX += 0.02 * Math.sin(st.t * 1.7);
+    Q.chestY += L.yaw * (mode === 'gunner' ? 0.4 : 0.25);
+    Q.neckY += L.yaw * 0.35; Q.headY += L.yaw * 0.4;
+    Q.neckX += L.pitch * 0.4; Q.headX += L.pitch * 0.5;
+  }
+  applyPose(s, Q);
+  applyArms(s, Q);
 }
 
 // ---- Deaths -----------------------------------------------------------------------------------
@@ -258,6 +334,14 @@ export function killSoldierAnim(s, thrown) {
   if (prone) list = DEATHS.filter((d) => d.face === 1);
   st.dead = { t: 0, air: !!thrown, spin: thrown?.spin ?? 0, vy: 0, pose: list[Math.floor(s.rand() * list.length)], landed: !thrown };
   if (s.binos && s.binos.parent !== b.chest) { b.chest.add(s.binos); s.binos.position.set(0, 0.06, -0.21); }
+}
+
+// Hit but alive: collapses like a death, then lies writhing until `st.dead.alive` is cleared.
+export function downSoldierAnim(s) {
+  killSoldierAnim(s, null);
+  const d = s.st.dead;
+  d.alive = true; d.agit = 0;
+  d.pose = DOWN[Math.floor(s.rand() * DOWN.length)];
 }
 
 // Called by the owner when a thrown body hits the ground.
@@ -299,6 +383,21 @@ export function animateDeadSoldier(s, dt) {
       d.vy -= 9.8 * dt;
       P.hipsY = Math.max(T.hipsY, P.hipsY + d.vy * dt);
     } else P.hipsY += (T.hipsY - P.hipsY) * kl;
+  }
+  // Still alive: writhing in waves, knees drawn up and let go, the head lifting, a hand clawing.
+  d.agit = clamp((d.agit ?? 0) + (d.alive && d.t > 1 ? dt * 0.8 : -dt * 0.6), 0, 1);
+  if (d.agit > 0) {
+    const Q = (d.q ??= {}), t = d.t, a = d.agit * (0.45 + 0.55 * Math.max(0, Math.sin(t * 0.55 + s.seed)));
+    for (const key of KEYS) Q[key] = P[key];
+    Q.thighRX += 0.25 * Math.sin(t * 1.3) * a; Q.kneeR -= 0.35 * (0.5 + 0.5 * Math.sin(t * 1.3)) * a;
+    Q.thighLX += 0.2 * Math.sin(t * 0.9 + 1) * a; Q.kneeL -= 0.3 * (0.5 + 0.5 * Math.sin(t * 0.9 + 1)) * a;
+    Q.neckX -= 0.3 * Math.max(0, Math.sin(t * 0.5)) * a; Q.headY += 0.35 * Math.sin(t * 0.35) * d.agit;
+    Q.armRX += 0.45 * Math.sin(t * 0.8 + 2) * a; Q.armRZ += 0.25 * Math.sin(t * 0.6) * a; Q.foreR += 0.35 * Math.sin(t * 1.1) * a;
+    Q.hipsZ += 0.07 * Math.sin(t * 0.6) * a; Q.spineY += 0.12 * Math.sin(t * 0.7) * a;
+    Q.chestX += 0.035 * Math.sin(t * 2.6) * d.agit;                  // hard breathing
+    applyPose(s, Q);
+    applyArms(s, Q);
+    return;
   }
   applyPose(s, P);
   applyArms(s, P);

@@ -1,7 +1,7 @@
 // Soldiers: a skinned body (a uniform with folds, lofted over a skeleton) plus rigid kit carried by
 // the bones: a shaped head and face, helmet or hat, plate carrier and pouches, gloves, boots and a
 // weapon. Variants differ in weapon (AK-74M, AKM, AK-12, PKM, RPG-7, AKS-74U), camo, kit, headgear,
-// face shape and skin tone. Units are metres; the soldier faces -Z with his right side at +X.
+// face shape and skin tone; tank crews get a padded helmet and coveralls. Units are metres; the soldier faces -Z with his right side at +X.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { mulberry32 } from './rng.js';
@@ -444,7 +444,11 @@ export function createSoldierFactory() {
     tapeWhite: std({ color: 0xd8d8d0, roughness: 0.7, side: THREE.DoubleSide }),
     tapeRed: std({ color: 0x9a1c18, roughness: 0.7, side: THREE.DoubleSide }),
     mat: std({ color: 0x4f5a45, roughness: 0.9 }),
+    tanker: std({ color: 0x1d1e1b, roughness: 0.85, side: THREE.DoubleSide }),
+    tankerCanvas: std({ color: 0x4a4a39, roughness: 0.95, side: THREE.DoubleSide }),
   };
+  // Tank crews' one-piece coveralls: black or dark olive.
+  const coveralls = [std({ color: 0x23251f, roughness: 0.95 }), std({ color: 0x3a3f2f, roughness: 0.95 })];
 
   const uniformGeo = keep(buildUniform());
   const headGeos = Array.from({ length: HEAD_VARIANTS }, (_, i) => keep(buildHead(mulberry32(900 + i * 37))));
@@ -491,6 +495,20 @@ export function createSoldierFactory() {
       k.add('helmet', helmetShell(0.088, 0.1, 0.106, 1.3, 1.5, 0), 0, 1.7, -0.006);
       k.add('helmet', new THREE.CylinderGeometry(0.16, 0.17, 0.03, 20, 1, true), 0, 1.69, -0.006);
       k.add('helmet', new THREE.RingGeometry(0.09, 0.17, 20, 1).rotateX(-HALF_PI), 0, 1.705, -0.006);
+    }),
+    // Soviet-pattern padded tank helmet: a soft cap with three padded rolls over the top, ear pieces
+    // for the intercom and a strap under the chin.
+    tanker: boneKit('head', (k) => {
+      k.add('helmet', helmetShell(0.104, 0.112, 0.122, 1.6, 2.0, 0), 0, 1.685, -0.004);
+      for (const x of [-0.045, 0, 0.045]) {
+        k.add('helmet', new THREE.TorusGeometry(0.108 - Math.abs(x) * 0.25, 0.016, 6, 18, Math.PI).rotateY(HALF_PI).scale(1, 1, 1.08), x, 1.688, -0.004);
+      }
+      for (const sd of [-1, 1]) {
+        k.add('helmet', new THREE.TorusGeometry(0.03, 0.012, 6, 14).rotateY(HALF_PI), sd * 0.103, 1.645, 0.0);
+        k.cyl('dark', 0.026, 0.026, 0.02, sd * 0.105, 1.645, 0.0, 0, 0, HALF_PI, 12);
+      }
+      k.add('strap', new THREE.TorusGeometry(0.085, 0.006, 4, 16, Math.PI).rotateZ(Math.PI).scale(1.15, 1, 1), 0, 1.6, -0.035, 0.35);
+      k.box('strap', 0.025, 0.035, 0.02, 0.07, 1.62, -0.11);                      // intercom lead plug
     }),
     cap: boneKit('head', (k) => {
       k.add('helmet', new THREE.CylinderGeometry(0.095, 0.088, 0.08, 18, 1).scale(1, 1, 1.15), 0, 1.735, -0.006);
@@ -626,7 +644,9 @@ export function createSoldierFactory() {
     const { map: bones, list } = makeBones();
     root.add(list[0]);
     const camo = Math.floor(rand() * camoMats.length);
-    const body = new THREE.SkinnedMesh(uniformGeo, camoMats[camo]);
+    const crew = variant === 'crew';
+    const coverall = crew && rand() < 0.65 ? coveralls[Math.floor(rand() * coveralls.length)] : null;
+    const body = new THREE.SkinnedMesh(uniformGeo, coverall ?? camoMats[camo]);
     body.frustumCulled = false;
     body.castShadow = body.receiveShadow = true;
     root.add(body);
@@ -637,15 +657,16 @@ export function createSoldierFactory() {
     const skin = skinMats[tone];
     const gearMat = rand() < 0.3 ? camoGearMats[camo] : gearMats[Math.floor(rand() * gearMats.length)];
     const officer = variant === 'officer';
-    const headKind = officer ? 'cap' : pick(rand, [['helmet', 0.55], ['helmetGoggles', 0.12], ['knit', 0.18], ['boonie', 0.15]]);
-    const helmetMat = headKind === 'knit' ? (rand() < 0.6 ? shared.knit : shared.knitTan)
+    const headKind = crew ? 'tanker' : officer ? 'cap' : pick(rand, [['helmet', 0.55], ['helmetGoggles', 0.12], ['knit', 0.18], ['boonie', 0.15]]);
+    const helmetMat = headKind === 'tanker' ? (rand() < 0.65 ? shared.tanker : shared.tankerCanvas)
+      : headKind === 'knit' ? (rand() < 0.6 ? shared.knit : shared.knitTan)
       : headKind === 'boonie' || headKind === 'cap' ? camoGearMats[camo] : rand() < 0.65 ? camoGearMats[camo] : shared.helmetPaint;
-    const balaclava = !officer && rand() < 0.35;
+    const balaclava = !officer && !crew && rand() < 0.35;
     const gloves = rand() < 0.7;
     const tape = rand() < 0.75 ? (rand() < 0.65 ? shared.tapeWhite : shared.tapeRed) : null;
     const mats = {
       gear: gearMat, strap: shared.strap, helmet: helmetMat, knit: helmetMat, dark: shared.dark, glass: shared.glass,
-      boot: rand() < 0.7 ? shared.boot : shared.bootTan, sole: shared.sole, cloth: camoMats[camo], mat: shared.mat, tape,
+      boot: rand() < 0.7 ? shared.boot : shared.bootTan, sole: shared.sole, cloth: coverall ?? camoMats[camo], mat: shared.mat, tape,
       gun: shared.gun, metal: shared.metal, wood: shared.wood, warhead: shared.warhead,
     };
     const attach = (bk) => {
@@ -660,10 +681,11 @@ export function createSoldierFactory() {
       return g;
     };
     attach(headgear[headKind]);
-    attach(rand() < 0.75 || officer ? chestKits.carrier : chestKits.vestOld);
-    if (!officer && rand() < 0.45) attach(chestKits.pack);
+    if (!crew) attach(rand() < 0.75 || officer ? chestKits.carrier : chestKits.vestOld);
+    else if (rand() < 0.3) attach(chestKits.vestOld);
+    if (!officer && !crew && rand() < 0.45) attach(chestKits.pack);
     attach(hipsKit);
-    if (officer) attach(holsterKit);
+    if (officer || (crew && rand() < 0.5)) attach(holsterKit);
     attach(neckKit);
     for (const k of [bootR, bootL, bootShaftR, bootShaftL, pocketR, pocketL]) attach(k);
     if (rand() < 0.5) { attach(kneeR); attach(kneeL); }
@@ -690,7 +712,7 @@ export function createSoldierFactory() {
     }
 
     // Weapon.
-    const gun = variant === 'mg' ? 'pkm' : variant === 'rpg' ? 'rpg' : officer ? 'aksu' : pick(rand, [['ak74', 0.6], ['akm', 0.25], ['ak12', 0.15]]);
+    const gun = variant === 'mg' ? 'pkm' : variant === 'rpg' ? 'rpg' : officer || crew ? 'aksu' : pick(rand, [['ak74', 0.6], ['akm', 0.25], ['ak12', 0.15]]);
     const weapon = weaponGroups[gun].clone();
     weapon.traverse((o) => { if (o.isMesh) { o.material = mats[o.userData.slot] ?? shared.gun; o.castShadow = true; } });
     const wpivot = new THREE.Group();
@@ -704,7 +726,7 @@ export function createSoldierFactory() {
     }
     const scale = (0.95 + rand() * 0.09);
     return {
-      root, bones, body, weapon, wpivot, gun, info: weapons[gun], binos, binosInfo: weapons.binos, officer, variant, scale,
+      root, bones, body, weapon, wpivot, gun, info: weapons[gun], binos, binosInfo: weapons.binos, officer, crew, variant, scale,
       seed, rand,
     };
   }

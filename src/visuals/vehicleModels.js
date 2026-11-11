@@ -185,10 +185,30 @@ function tankHull(kit, o) {
   for (const sx of [-1, 1]) kit.box('paint', 0.6, 0.04, L - 0.3, sx * (W / 2 - 0.4), 1.46, 0.05); // fenders
   kit.box('dark', W - 0.5, 0.12, 0.25, 0, 1.08, -hz - 0.2);
   for (const sx of [-1, 1]) kit.box('dark', 0.12, 0.08, 0.5, sx * 1.35, 1.02, -hz - 0.32);
-  kit.box('dark', 0.4, 0.05, 0.3, -0.45, 1.53, -hz + 1.55);       // driver's hatch
+  kit.cyl('dark', 0.24, 0.24, 0.03, -0.45, 1.515, -hz + 1.55, 0, 0, 0, 14);  // driver's hatch ring
   kit.box('glass', 0.18, 0.05, 0.06, -0.45, 1.56, -hz + 1.38);
   for (const sx of [-1, 1]) kit.box('glass', 0.06, 0.06, 0.04, sx * 1.0, 1.2, -hz - 0.1); // headlights
   return { hz };
+}
+
+// Kit carried on the outside of a tank: tow cables, headlight guards, spare track links on the
+// lower glacis, and (Soviet style) extra fuel drums on the right fender.
+function tankStowage(kit, o) {
+  const { hz, W } = o, x = W / 2 - 0.08;
+  for (const sx of [-1, 1]) {
+    for (const dy of [0, -0.05]) kit.rod('steel', V(sx * x, 1.37 + dy, -hz + 0.6), V(sx * x, 1.37 + dy, hz - 0.8), 0.021, 5);
+    kit.cyl('steel', 0.06, 0.06, 0.025, sx * x, 1.345, -hz + 0.52, 0, 0, HALF_PI, 8);
+    kit.rod('steel', V(sx * 1.0, 1.12, -hz - 0.16), V(sx * 1.0, 1.32, -hz - 0.24), 0.01, 4);
+    kit.rod('steel', V(sx * 0.9, 1.32, -hz - 0.24), V(sx * 1.1, 1.32, -hz - 0.24), 0.01, 4);
+  }
+  for (let i = 0; i < 5; i++) {
+    kit.box('dark', 0.36, 0.045, 0.15, -1.1 + i * 0.55, 0.7, -hz + 0.06, -0.85);
+    kit.box('steel', 0.08, 0.06, 0.06, -1.1 + i * 0.55, 0.74, -hz + 0.02, -0.85);
+  }
+  if (o.fuel) for (let i = 0; i < 3; i++) {
+    kit.cyl('dark', 0.17, 0.17, 0.75, W / 2 - 0.32, 1.67, -0.2 + i * 0.85, HALF_PI, 0, 0, 12);
+    kit.box('steel', 0.4, 0.03, 0.05, W / 2 - 0.32, 1.67, 0.15 + i * 0.85);
+  }
 }
 
 function tankCommonTurretBits(tur, o) {
@@ -196,6 +216,12 @@ function tankCommonTurretBits(tur, o) {
     for (let k = 0; k < 4; k++) tur.cyl('dark', 0.045, 0.045, 0.32, sx * (0.9 + k * 0.1), 0.55, -0.85 + k * 0.12, -0.9, 0, 0, 7); // smoke dischargers
   }
   tur.cyl('dark', 0.34, 0.37, 0.24, 0.55, o.roof, 0.2, 0, 0, 0, 14);          // commander's cupola
+  for (let k = 0; k < 6; k++) {                                                 // vision blocks
+    const a = (k / 6) * Math.PI * 2;
+    tur.box('glass', 0.08, 0.05, 0.03, 0.55 + Math.sin(a) * 0.35, o.roof + 0.06, 0.2 + Math.cos(a) * 0.35, 0, a, 0);
+  }
+  tur.cyl('dark', 0.26, 0.26, 0.03, -0.45, o.gunnerY, o.gunnerZ, 0, 0, 0, 14);  // gunner's hatch ring
+  for (const sx of [-1, 1]) tur.rod('steel', V(sx * 0.95, 0.5, 0.9), V(sx * 1.1, 0.42, 1.25), 0.015, 4); // grab rails
   tur.cyl('steel', 0.03, 0.03, 1.3, 0.55, o.roof + 0.24, -0.3, HALF_PI, 0, 0, 6); // Kord MG
   tur.box('dark', 0.16, 0.18, 0.5, 0.55, o.roof + 0.22, 0.1);
   tur.rod('steel', V(-0.75, 0.6, 1.1), V(-0.9, 3.0, 1.35), 0.008, 4);          // radio whip
@@ -209,6 +235,24 @@ function tankGun(len, r) {
   gun.cyl('steel', r * 1.75, r * 1.6, 0.55, 0, 0, -len * 0.45, HALF_PI, 0, 0, 14); // fume extractor
   gun.cyl('steel', r * 1.15, r * 1.15, 0.2, 0, 0, -len + 0.05, HALF_PI, 0, 0, 12);
   return gun;
+}
+
+// Crew seats shown out of the hatches: `pos` is where the figure stands (its feet; the lower body is
+// hidden in the hull). Drivers sit, with the legs forward.
+function tankCrew(hz, cmdY) {
+  return [
+    { role: 'commander', on: 'turret', pos: [0.55, cmdY, 0.2], hatch: 'commander' },
+    { role: 'driver', on: 'hull', pos: [-0.44, 0.08, -hz + 1.6], hatch: 'driver', mode: 'driver' },
+  ];
+}
+
+// Hatch lids: hinged at `pos`, the lid extending along `dir` (x, z) from the hinge.
+function tankHatches(hz, cupolaTop, gunnerY, gunnerZ) {
+  return [
+    { name: 'commander', on: 'turret', pos: [0.55, cupolaTop + 0.01, 0.5], r: 0.3, dir: [0, -1] },
+    { name: 'gunner', on: 'turret', pos: [-0.45, gunnerY + 0.01, gunnerZ + 0.25], r: 0.25, dir: [0, -1] },
+    { name: 'driver', on: 'hull', pos: [-0.65, 1.535, -hz + 1.55], r: 0.21, dir: [1, 0] },
+  ];
 }
 
 function buildT72() {
@@ -249,7 +293,9 @@ function buildT72() {
   tur.box('glass', 0.38, 0.22, 0.02, -0.55, 0.88, -0.71);
   tur.cyl('dark', 0.11, 0.11, 2.2, 0, 0.55, 1.55, 0, 0, HALF_PI, 10);           // snorkel
   tur.box('paint', 0.9, 0.55, 0.55, 0, 0.32, -1.35);                            // mantlet
-  tankCommonTurretBits(tur, { roof: 0.78 });
+  tankCommonTurretBits(tur, { roof: 0.78, gunnerY: 0.63, gunnerZ: 0.35 });
+  tur.cyl('canvas', 0.15, 0.15, 1.5, 0, 0.5, 1.55, 0, 0, HALF_PI, 10);          // rolled tarpaulin
+  tankStowage(hull, { hz, W });
   const cage = new Kit(2.3);
   copeCage(cage, 3.3, 3.6, 0.95, 0.1);
   return {
@@ -257,6 +303,7 @@ function buildT72() {
     exhaust: [[-1.75, 1.3, hz - 0.6, -1, 0.3, 0.3]], fires: [[0, 1.6, hz - 1.0], [0.55, 2.4, 0.0], [-0.45, 1.55, -hz + 1.55]],
     turret: { kit: tur, pos: [0, 1.5, -0.25], gun: { kit: tankGun(5.1, 0.1), pos: [0, 0.35, -1.55] }, cage: { kit: cage, pos: [0, 0.8, 0] } },
     tossOnDeath: ['drums', 'skirtL', 'skirtR'], sink: 0.05,
+    hatches: tankHatches(hz, 0.9, 0.645, 0.35), crew: tankCrew(hz, -0.43),
   };
 }
 
@@ -291,7 +338,8 @@ function buildT80() {
   tur.box('dark', 0.45, 0.4, 0.45, -0.55, 0.8, -0.4);
   tur.box('glass', 0.34, 0.2, 0.02, -0.55, 0.83, -0.63);
   tur.box('paint', 0.85, 0.5, 0.5, 0, 0.3, -1.3);
-  tankCommonTurretBits(tur, { roof: 0.74 });
+  tankCommonTurretBits(tur, { roof: 0.74, gunnerY: 0.6, gunnerZ: 0.35 });
+  tankStowage(hull, { hz, W });
   const cage = new Kit(2.3);
   copeCage(cage, 3.2, 3.8, 0.9, 0.3);
   return {
@@ -299,6 +347,7 @@ function buildT80() {
     exhaust: [[0, 1.15, hz + 0.15, 0, 0.1, 1]], fires: [[0, 1.6, hz - 1.2], [0.55, 2.35, 0.1], [-0.45, 1.55, -hz + 1.55]],
     turret: { kit: tur, pos: [0, 1.5, -0.3], gun: { kit: tankGun(5.0, 0.1), pos: [0, 0.33, -1.5] }, cage: { kit: cage, pos: [0, 0.78, 0] } },
     tossOnDeath: ['skirtL', 'skirtR'], sink: 0.05,
+    hatches: tankHatches(hz, 0.86, 0.615, 0.35), crew: tankCrew(hz, -0.47),
   };
 }
 
@@ -331,7 +380,9 @@ function buildT90() {
   tur.box('glass', 0.38, 0.22, 0.02, -0.6, 1.0, -0.71);
   tur.cyl('dark', 0.16, 0.16, 0.45, 0.65, 1.02, -0.2, 0, 0, 0, 12);                 // panoramic sight
   tur.box('paint', 0.9, 0.55, 0.5, 0, 0.32, -1.5);
-  tankCommonTurretBits(tur, { roof: 0.86 });
+  tankCommonTurretBits(tur, { roof: 0.86, gunnerY: 0.79, gunnerZ: 0.45 });
+  tur.cyl('canvas', 0.15, 0.15, 1.7, 0, 0.75, 2.55, 0, 0, HALF_PI, 10);
+  tankStowage(hull, { hz, W, fuel: true });
   const cage = new Kit(2.4);
   copeCage(cage, 3.4, 4.0, 0.9, 0.35);
   return {
@@ -339,6 +390,7 @@ function buildT90() {
     exhaust: [[-1.85, 1.3, hz - 0.6, -1, 0.3, 0.3]], fires: [[0, 1.6, hz - 1.0], [0.65, 2.45, 0.0], [-0.45, 1.55, -hz + 1.55]],
     turret: { kit: tur, pos: [0, 1.5, -0.3], gun: { kit: tankGun(5.2, 0.1), pos: [0, 0.38, -1.75] }, cage: { kit: cage, pos: [0, 0.92, 0] } },
     tossOnDeath: ['skirtL', 'skirtR'], sink: 0.05,
+    hatches: tankHatches(hz, 0.98, 0.805, 0.45), crew: tankCrew(hz, -0.35),
   };
 }
 
@@ -383,6 +435,11 @@ function buildBtr() {
     exhaust: [[1.35, 1.6, 2.9, 1, 0.2, 0.2]], fires: [[0, 2.1, 2.6], [0.6, 2.15, 1.3], [-1.38, 1.7, -0.35]],
     turret: { kit: tur, pos: [0, 2.05, -1.0], gun: { kit: gun, pos: [0, 0.25, -0.75] }, cage: { kit: cage, pos: [0, 0.55, 0] } },
     tossOnDeath: ['hatch'], sink: 0.3,
+    hatches: [
+      { name: 'commander', on: 'hull', pos: [0.5, 2.085, -1.35], r: 0.22, dir: [0, -1] },
+      { name: 'driver', on: 'hull', pos: [-0.5, 2.085, -1.35], r: 0.22, dir: [0, -1] },
+    ],
+    crew: [{ role: 'commander', on: 'hull', pos: [0.5, 0.65, -1.57], hatch: 'commander' }, { role: 'driver', on: 'hull', pos: [-0.5, 0.66, -1.57], hatch: 'driver', mode: 'driver' }],
   };
 }
 
@@ -422,6 +479,12 @@ function buildBmp() {
     exhaust: [[1.5, 1.2, -1.6, 1, 0.2, 0]], fires: [[0.55, 1.65, -2.0], [0, 1.6, 1.6], [-0.6, 1.6, -1.4]],
     turret: { kit: tur, pos: [0, 1.58, -0.35], gun: { kit: gun, pos: [0, 0.32, -0.75] }, cage: { kit: cage, pos: [0, 0.65, 0] } },
     tossOnDeath: [], sink: 0.04,
+    hatches: [
+      { name: 'commander', on: 'turret', pos: [0.38, 0.67, 0.5], r: 0.22, dir: [0, -1] },
+      { name: 'gunner', on: 'turret', pos: [-0.38, 0.67, 0.5], r: 0.22, dir: [0, -1] },
+      { name: 'rear', on: 'hull', pos: [0.5, 1.56, 1.05], w: 0.55, d: 0.5, dir: [0, 1] },
+    ],
+    crew: [{ role: 'commander', on: 'turret', pos: [0.38, -0.62, 0.28], hatch: 'commander' }, { role: 'gunner', on: 'turret', pos: [-0.38, -0.62, 0.28], hatch: 'gunner' }],
   };
 }
 
@@ -432,7 +495,7 @@ function buildMtlb() {
   for (const sx of [-1, 1]) zMark(hull, sx * 1.44, 1.2, 1.0, 0.5, sx * HALF_PI);
   hull.box('glass', 0.55, 0.22, 0.04, -0.55, 1.5, -2.9, -0.5);
   hull.box('glass', 0.55, 0.22, 0.04, 0.55, 1.5, -2.9, -0.5);
-  hull.box('dark', 0.6, 0.06, 0.6, -0.55, 1.71, -2.0);
+  hull.cyl('dark', 0.3, 0.3, 0.03, -0.55, 1.7, -2.0, 0, 0, 0, 14);
   for (let i = 0; i < 2; i++) for (const sx of [-1, 1]) hull.box('dark', 0.75, 0.06, 0.9, sx * 0.6, 1.66, 0.6 + i * 1.3); // roof hatches
   for (const sx of [-1, 1]) hull.box('paint', 0.6, 0.95, 0.06, sx * 0.55, 1.05, 3.27);                       // rear doors
   hull.box('dark', 1.6, 0.04, 0.5, 0, 1.69, -1.2);                                                          // engine louvres
@@ -450,6 +513,11 @@ function buildMtlb() {
     hull, wheels, parts, size: [2.9, 2.0, 6.5], tracked: true, engine: [0, 1.7, -1.2],
     exhaust: [[1.3, 1.4, -1.0, 1, 0.2, 0]], fires: [[0, 1.7, -1.2], [0.6, 1.7, 0.6], [-0.6, 1.7, 1.9]],
     tossOnDeath: ['cage'], sink: 0.04,
+    hatches: [
+      { name: 'commander', on: 'hull', pos: [0.6, 2.005, -1.82], r: 0.28, dir: [0, -1] },
+      { name: 'driver', on: 'hull', pos: [-0.55, 1.715, -1.72], r: 0.28, dir: [0, -1] },
+    ],
+    crew: [{ role: 'commander', on: 'hull', pos: [0.6, 0.62, -2.1], hatch: 'commander' }, { role: 'driver', on: 'hull', pos: [-0.55, 0.32, -2.0], hatch: 'driver', mode: 'driver' }],
   };
 }
 
@@ -642,6 +710,7 @@ function buildTechnical() {
     exhaust: [[0.6, 0.45, 2.55, 0, 0, 1]], fires: [[0, 0.95, -2.0], [0, 1.3, -0.3], [0, 1.2, 1.4]],
     turret: { kit: tur, pos: [0, 0.86, 1.4], gun: { kit: gun, pos: [0, 0.86, -0.15] } },
     tossOnDeath: [], sink: 0.22,
+    crew: [{ role: 'gunner', on: 'turret', pos: [0, 0.0, 0.62], mode: 'gunner' }],
   };
 }
 
