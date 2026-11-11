@@ -404,6 +404,42 @@ export function createEntities({ scene, level, smoke, fire }) {
     });
   }
 
+  // A panicked soldier fires a few rounds up at the drone: flash at the muzzle, one tracer.
+  function shotAt(ev, v) {
+    const from = tmpV.fromArray(ev.from);
+    const s = v?.s;
+    if (s?.weapon?.visible && s.info?.muzzle) s.weapon.localToWorld(from.fromArray(s.info.muzzle));
+    const to = tmpV2.fromArray(ev.to);
+    const dir = tmpV3.copy(to).sub(from);
+    const dist = dir.length();
+    if (dist < 0.5) return;
+    dir.divideScalar(dist);
+    fire.spawn({ pos: [from.x + dir.x * 0.15, from.y + dir.y * 0.15, from.z + dir.z * 0.15], vel: [0, 0, 0], size: 0.45, grow: 0.5, life: 0.06, color: [3, 2.4, 1.4], alpha: 1, fadeIn: 100, drag: 0 });
+    // Tracer: a fast bright point along the line, a little off when it misses.
+    const sp = 320, miss = ev.hit ? 0 : 0.03;
+    const vx = (dir.x + (Math.random() - 0.5) * miss) * sp, vy = (dir.y + (Math.random() - 0.5) * miss) * sp, vz = (dir.z + (Math.random() - 0.5) * miss) * sp;
+    if (Math.random() < 0.6) fire.spawn({ pos: [from.x + dir.x, from.y + dir.y, from.z + dir.z], vel: [vx, vy, vz], size: 0.12, grow: 0, life: Math.min(1.2, (dist + 60) / sp), drag: 0, color: [3, 1.6, 0.6], alpha: 1, fadeIn: 100 });
+  }
+
+  // He throws his helmet or rifle at the drone: a copy flies on the sim's arc, his own one goes.
+  function throwAt(ev, v) {
+    const s = v?.s;
+    if (!s) return;
+    const src = ev.item === 'helmet' ? s.headgear : s.weapon;
+    if (!src || !src.visible) return;
+    src.updateWorldMatrix(true, true);
+    const obj = src.clone();
+    src.getWorldPosition(obj.position); src.getWorldQuaternion(obj.quaternion); src.getWorldScale(obj.scale);
+    if (ev.position) obj.position.fromArray(ev.position);
+    scene.add(obj);
+    src.visible = false;
+    debris.push({
+      obj, vel: new THREE.Vector3().fromArray(ev.velocity), rest: false, own: false,
+      spin: new THREE.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 14),
+      lift: ev.item === 'helmet' ? 0.08 : 0.04,
+    });
+  }
+
   function chunk(at, size, mat, from, speed, lift) {
     const m = new THREE.Mesh(chunkGeo, mat);
     m.scale.copy(size);
@@ -1125,6 +1161,10 @@ export function createEntities({ scene, level, smoke, fire }) {
             }
           }
         }
+      } else if (ev.type === 'entity_shot') {
+        shotAt(ev, live.get(ev.entityId));
+      } else if (ev.type === 'entity_throw') {
+        throwAt(ev, live.get(ev.entityId));
       } else if (ev.type === 'entity_destroyed') {
         const v = live.get(ev.entityId);
         if (v && !v.dead && v.kind !== 'infantry') killVehicle(v, byId.get(ev.entityId), true);

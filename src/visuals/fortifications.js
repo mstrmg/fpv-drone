@@ -94,6 +94,29 @@ function screenTexture() {
   return canvasTexture(c, {});
 }
 
+// The overlay on Sasha's TV: his drone's sight and a REC mark, over the live picture.
+function tvOverlayTexture() {
+  const W = 384, H = 216, c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.strokeStyle = 'rgba(235,240,230,0.8)'; g.lineWidth = 1.5;
+  const cx = W / 2, cy = H / 2;
+  for (const [x0, y0, x1, y1] of [[cx - 22, cy, cx - 7, cy], [cx + 7, cy, cx + 22, cy], [cx, cy - 22, cx, cy - 7], [cx, cy + 7, cx, cy + 22]]) {
+    g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+  }
+  // Corner brackets.
+  for (const [x, y, sx, sy] of [[14, 14, 1, 1], [W - 14, 14, -1, 1], [14, H - 14, 1, -1], [W - 14, H - 14, -1, -1]]) {
+    g.beginPath(); g.moveTo(x, y + sy * 16); g.lineTo(x, y); g.lineTo(x + sx * 16, y); g.stroke();
+  }
+  g.font = 'bold 12px monospace';
+  g.fillStyle = '#e8463a'; g.beginPath(); g.arc(24, 30, 4.5, 0, 7); g.fill();
+  g.fillStyle = 'rgba(235,240,230,0.85)';
+  g.fillText('REC', 33, 34);
+  g.fillText('x16', W - 44, 34);
+  g.fillText('ALT 130  BAT 62%', 20, H - 22);
+  return canvasTexture(c, {});
+}
+
 export function createFortifications({ scene, level }) {
   const pr = level.props ?? {};
   const trenches = pr.trenches ?? [], dugouts = pr.dugouts ?? [], masts = pr.masts ?? [];
@@ -460,7 +483,8 @@ export function createFortifications({ scene, level }) {
 
   // ---- Inside the player's dugout ---------------------------------------------------------------
   const home = dugouts.find((d) => d.player);
-  let buddy = null, lamp = null, soldiers = null;
+  let buddy = null, lamp = null, soldiers = null, tvMat = null, tvScreen = null;
+  const tvParts = [];
   const spares = [];
   if (home) {
     const d = home, hw = d.w / 2, hd = d.d / 2;
@@ -517,6 +541,22 @@ export function createFortifications({ scene, level }) {
     const screen = new THREE.Mesh(keep(new THREE.PlaneGeometry(0.31, 0.19).translate(0, 0.11, 0.007)),
       keep(new THREE.MeshBasicMaterial({ map: scr, color: 0xb8c4b0 })));
     lid.add(screen);
+    // The TV on the front wall: what Sasha's spotter drone sees, live (the picture is set from outside).
+    const tvW = 0.8, tvH = 0.45, tvY = 1.42, tvZ = -hd + 0.05;
+    add(new THREE.BoxGeometry(tvW + 0.05, tvH + 0.05, 0.05), plastic, tx, tvY, tvZ);
+    tvMat = keep(new THREE.MeshBasicMaterial({ color: 0x050605, toneMapped: true }));
+    tvScreen = new THREE.Mesh(keep(new THREE.PlaneGeometry(tvW, tvH)), tvMat);
+    tvScreen.position.set(tx, tvY, tvZ + 0.04);
+    room.add(tvScreen);
+    const tvOver = new THREE.Mesh(keep(new THREE.PlaneGeometry(tvW, tvH)),
+      keep(new THREE.MeshBasicMaterial({ map: keep(tvOverlayTexture()), transparent: true, depthWrite: false, color: 0x9a9a9a })));
+    tvOver.position.set(tx, tvY, tvZ + 0.052);
+    room.add(tvOver);
+    tvParts.push(tvScreen, tvOver);
+    // Hung from the roof logs on two wires, a cable down to the table.
+    for (const x of [-0.25, 0.25]) add(new THREE.CylinderGeometry(0.004, 0.004, d.depth - tvY - tvH / 2, 4), plastic, tx + x, (d.depth + tvY + tvH / 2) / 2, tvZ);
+    add(new THREE.CylinderGeometry(0.006, 0.006, tvY - tvH / 2 - 0.78, 5), plastic, tx + 0.28, (tvY - tvH / 2 + 0.78) / 2, tvZ + 0.03);
+
     // Powerbank and battery packs, a mug.
     for (let k = 0; k < 3; k++) add(new THREE.BoxGeometry(0.14, 0.05, 0.045), plastic, tx + 0.05 + k * 0.06, 0.81, tz - 0.2, 0.1 * k);
     add(new THREE.CylinderGeometry(0.04, 0.035, 0.09, 12), olive, tx + 0.55, 0.83, tz - 0.18);
@@ -582,6 +622,13 @@ export function createFortifications({ scene, level }) {
 
   let t = 0;
   return {
+    // Sasha's TV: `tv.setPicture(texture)`, `tv.position` (world), `tv.visible(on)` to hide it while
+    // its own picture is rendered.
+    tv: tvScreen ? {
+      position: tvScreen.getWorldPosition(new THREE.Vector3()),
+      setPicture(tex) { tvMat.map = tex; tvMat.color.setScalar(tex ? 0.75 : 0.02); tvMat.needsUpdate = true; },
+      visible(on) { for (const o of tvParts) o.visible = on; },
+    } : null,
     update(dt, camPos) {
       t += dt;
       if (buddy) {

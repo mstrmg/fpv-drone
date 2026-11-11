@@ -683,7 +683,7 @@ export function createSoldierFactory() {
       bones[b.bone].add(g);
       return g;
     };
-    attach(headgear[headKind]);
+    const hat = attach(headgear[headKind]);
     if (!crew) attach(rand() < 0.75 || officer ? chestKits.carrier : chestKits.vestOld);
     else if (rand() < 0.3) attach(chestKits.vestOld);
     if (!officer && !crew && rand() < 0.45) attach(chestKits.pack);
@@ -730,7 +730,7 @@ export function createSoldierFactory() {
     const scale = (0.95 + rand() * 0.09);
     return {
       root, bones, body, weapon, wpivot, gun, info: weapons[gun], binos, binosInfo: weapons.binos, officer, crew, variant, scale,
-      seed, rand,
+      seed, rand, headgear: hat,
     };
   }
 

@@ -177,7 +177,7 @@ export async function createSim({ level, settings = {} }) {
     applyBlast(x.position, [0, 1, 0], w, x.ignoreHandle);
   }
   const entities = createEntities({
-    world, level, emit: (e) => emit(e), damage, explode, registerCollider: (h, id) => entityColliders.set(h, id), unregisterCollider: (h) => entityColliders.delete(h),
+    world, level, emit: (e) => emit(e), damage, explode, droneHit: (cause) => hitDrone(cause), registerCollider: (h, id) => entityColliders.set(h, id), unregisterCollider: (h) => entityColliders.delete(h),
   });
   state.entities = entities.states;
   const missions = walker ? createMissions({ level, entities, state, emit: (e) => emit(e) }) : null;
@@ -207,6 +207,7 @@ export async function createSim({ level, settings = {} }) {
     fm.resetBattery();
     state.drone.crashed = false;
     state.drone.destroyed = false;
+    droneHits = 0;
     state.drone.warhead.state = 'safe';
     state.link.lost = false;
     state.link.signal = 1;
@@ -218,6 +219,18 @@ export async function createSim({ level, settings = {} }) {
     flightTime = 0;
     upsideDownTime = 0;
     writeState();
+  }
+
+  // Small-arms fire: a round through the frame glitches the feed; a second one takes out a motor.
+  let droneHits = 0;
+  function hitDrone(cause) {
+    const d = state.drone;
+    if (d.destroyed || d.crashed || state.mode === 'foot') return;
+    droneHits++;
+    const p = body.translation();
+    emit({ type: 'drone_hit', cause, position: [p.x, p.y, p.z], hits: droneHits });
+    if (droneHits >= 2) crash([p.x, p.y, p.z], 0, cause === 'bullet' ? 'shot' : cause);
+    else body.applyTorqueImpulse({ x: (Math.random() - 0.5) * 0.004, y: 0, z: (Math.random() - 0.5) * 0.004 }, true);
   }
 
   function setArmed(on) {

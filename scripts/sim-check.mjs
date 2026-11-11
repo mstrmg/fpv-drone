@@ -363,8 +363,9 @@ const age = (sim, secs) => { for (let i = 0; i < secs * SIM_HZ; i++) sim.entitie
   sim._body.setLinvel({ x: 0, y: 0, z: 0 }, true);
   c.throttle = globalThis.hoverLoaded; const ev = [];
   run(sim, c, 4, () => collect(sim, ev));
-  const reacting = squad.filter((e) => e.status === 'fleeing' || e.status === 'prone').length;
-  check('infantry notice the drone and react', reacting >= 3 && ev.some((x) => x.type === 'entity_alerted'), `${reacting}/${squad.length} fleeing or prone`);
+  // They panic rather than run off: dodging sideways, hitting the dirt, throwing things, the odd burst.
+  const reacting = squad.filter((e) => e.status === 'moving' || e.status === 'prone').length;
+  check('infantry notice the drone and panic', reacting >= 3 && ev.some((x) => x.type === 'entity_alerted'), `${reacting}/${squad.length} dodging or prone`);
 }
 
 // 17. Video link: fine up high, rolls when low and far from the launch point

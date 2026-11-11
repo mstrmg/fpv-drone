@@ -119,6 +119,8 @@ export function createEnvironment({ scene, renderer, noiseTex }) {
 
   return {
     update,
+    sun,
+    sky, // follows the camera; move it along for a second camera far away
     dispose() { envRT.dispose(); skyGeo.dispose(); skyMat.dispose(); },
   };
 }

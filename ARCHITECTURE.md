@@ -102,6 +102,10 @@ Level = {
 
 Level enemy defs may also carry `mission: <id>` (a target of that mission) and `hold: true` (alerted infantry go flat and shift
 about their patrol line but never run off).
+Infantry within 32 m of a flying drone panic instead of running: they dodge sideways across its line, hit the dirt,
+throw their helmet or rifle at it (`entity_throw`) and now and then fire a burst (`entity_shot`, rarely a hit).
+Hitboxes: vehicles are compound boxes per variant (HIT_SHAPES: hull, turret, gun...); infantry boxes follow posture
+(standing, lying, seated).
 Level enemy defs may carry `riders: [variant, ...]`: infantry that ride on top of that vehicle (seats per
 variant in RIDER_SEATS, src/sim/entities.js) until it is knocked out or stops while they are alarmed.
 
@@ -125,6 +129,7 @@ SimState = {
     done, total,            // targets dealt with (dead, down, or vehicle knocked out) / all
     speaker, line: string | null, lineId,   // subtitle on screen now; lineId changes with every new line (speak it once)
     cutscene: null | { position:[x,y,z], target:[x,y,z], fovDeg },  // on foot: show the spotter feed from here instead of the eyes
+    spotter: { position, target, fovDeg },  // what his drone sees all the time: the TV in the dugout (copies the cutscene while there is one)
   },
   // There is no chase / third-person view: the game is FPV only.
 
@@ -258,7 +263,8 @@ Every event has `{ type, time }` plus:
 | `armed`            | –            | motors started |
 | `disarmed`         | –            | motors stopped |
 | `collision`        | `position, normal, impactSpeed` | the drone bumped something but survived |
-| `crash`            | `position, impactSpeed, cause?: 'wire'` | the drone broke (`cause: 'wire'` = tangled in a telegraph cable) |
+| `crash`            | `position, impactSpeed, cause?: 'wire' \| 'shot'` | the drone broke (`cause: 'wire'` = tangled in a telegraph cable, `'shot'` = second hit from small arms) |
+| `drone_hit`        | `cause: 'bullet' \| 'thrown', position, hits` | a round or a thrown thing hit the drone (first one only knocks it) |
 | `reset`            | –            | drone respawned; visuals should clear trails, debris, etc. |
 | `explosion`        | see below | something blew up |
 | `drone_lost`       | `reason: 'detonated'`, `respawnIn` (s) | the drone is gone; `link.lost` is true (video feed is static) until the `reset` that follows |
@@ -275,6 +281,8 @@ Every event has `{ type, time }` plus:
 | `link_lost` / `link_restored` | – | signal fell below 0.08 / recovered (not sent for the detonation cut, see `drone_lost`) |
 | `mission`          | `id, phase: 'intro' \| 'active' \| 'complete', title` | campaign mission started / objective live / all targets dealt with |
 | `mission_line`     | `speaker, text, lineId` | the other soldier says something |
+| `entity_shot`      | `entityId, from:[x,y,z], to:[x,y,z], hit` | a panicked soldier fires a round at the drone (muzzle flash + tracer) |
+| `entity_throw`     | `entityId, item: 'helmet' \| 'rifle', position, velocity` | he throws it at the drone: it flies ballistically from there |
 | `mode`             | `mode: 'foot' \| 'drone'` | goggles on / off (campaign). After a detonation the next drone is put by the mast and you are back on foot |
 
 `explosion` fields:

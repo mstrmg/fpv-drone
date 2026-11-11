@@ -47,6 +47,11 @@ export function createVisuals({ canvas, uiRoot, level }) {
   const explosions = createExplosions({ scene, level, smoke: particles, fire, terrain });
   const entities = createEntities({ scene, level, smoke: particles, fire });
   const feed = createFeed({ renderer });
+  // Sasha's TV in the dugout: his spotter drone's picture, rendered small into a texture.
+  const tvTarget = forts.tv ? new THREE.WebGLRenderTarget(384, 216, { type: THREE.HalfFloatType, depthBuffer: true }) : null;
+  const tvCam = new THREE.PerspectiveCamera(12, 384 / 216, 1, 6000);
+  let tvFrame = 0;
+  if (tvTarget) forts.tv.setPicture(tvTarget.texture);
   const osd = createOSD();
   feed.uniforms.tOsd.value = osd.texture;
   feed.uniforms.uExposure.value = 0.82;
@@ -145,6 +150,10 @@ export function createVisuals({ canvas, uiRoot, level }) {
         helpFade = setTimeout(() => { help.style.opacity = '0'; }, 9000);
       } else if (ev.type === 'armed') {
         glitch = Math.max(glitch, 0.15);
+      } else if (ev.type === 'drone_hit') {
+        // A round or a thrown helmet clipped the frame: a jolt and a burst of static.
+        glitch = Math.max(glitch, ev.cause === 'bullet' ? 0.7 : 0.45);
+        shake = Math.max(shake, 0.6);
       }
     }
   }
@@ -287,7 +296,34 @@ export function createVisuals({ canvas, uiRoot, level }) {
     spotter.style.display = spotting && !debug.freeCam ? 'block' : 'none';
     paused.style.display = state.paused ? 'flex' : 'none';
 
+    renderTv(state, foot && !briefing);
     feed.render(scene, camera);
+  }
+
+  // The TV only updates when you are in the dugout looking about, every other frame.
+  function renderTv(state, on) {
+    const sp = state.mission?.spotter;
+    if (!tvTarget || !sp || !on || state.paused) return;
+    if (camera.position.distanceToSquared(forts.tv.position) > 9 * 9 || (tvFrame++ & 1)) return;
+    tvCam.position.fromArray(sp.position);
+    tvCam.position.x += Math.sin(time * 0.31) * 0.8;
+    tvCam.position.y += Math.sin(time * 0.23 + 1) * 0.5;
+    tvCam.lookAt(lookTarget.fromArray(sp.target));
+    tvCam.fov = sp.fovDeg;
+    tvCam.updateProjectionMatrix();
+    forts.tv.visible(false);
+    // The sun's shadow map only covers the dugout around you: the far-off picture goes without.
+    const autoShadow = renderer.shadowMap.autoUpdate, shadowK = env.sun.shadow.intensity;
+    renderer.shadowMap.autoUpdate = false;
+    env.sun.shadow.intensity = 0;
+    env.sky.position.copy(tvCam.position);
+    renderer.setRenderTarget(tvTarget);
+    renderer.render(scene, tvCam);
+    renderer.setRenderTarget(null);
+    renderer.shadowMap.autoUpdate = autoShadow;
+    env.sun.shadow.intensity = shadowK;
+    env.sky.position.copy(camera.position);
+    forts.tv.visible(true);
   }
 
   function resize(w, h) {
@@ -308,6 +344,7 @@ export function createVisuals({ canvas, uiRoot, level }) {
       overlay.remove();
       for (const part of [env, terrain, trees, buildings, props, forts, grass, drone, particles, fire, explosions, entities, feed, osd]) part.dispose();
       detailTex.dispose();
+      tvTarget?.dispose();
       renderer.dispose();
       if (window.__fpvVisuals === debug) delete window.__fpvVisuals;
     },

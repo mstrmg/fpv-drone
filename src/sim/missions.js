@@ -21,6 +21,7 @@ export function createMissions({ level, entities, state, emit }) {
     done: 0, total: 0,
     speaker: SPEAKER, line: null, lineId: 0,                 // the subtitle on screen now; lineId changes per line
     cutscene: null,                                          // spotter camera { position, target, fovDeg } while briefing
+    spotter: { position: [0, 0, 0], target: [0, 0, 0], fovDeg: 10 }, // what his drone sees all the time (the TV in the dugout)
   };
   state.mission = list.length ? m : null;
   if (!list.length) return { update() {}, skip() { return false; }, reset() {} };
@@ -78,6 +79,27 @@ export function createMissions({ level, entities, state, emit }) {
     camPos[1] = Math.max(look[1], level.terrain.heightAt(camPos[0], camPos[2])) + (s.height ?? 120);
   }
 
+  // Between briefings his drone circles over the targets of the mission (or the enemy line).
+  let orbit = 0;
+  function spotterView(dt) {
+    const sp = m.spotter;
+    if (m.cutscene) {
+      for (let i = 0; i < 3; i++) { sp.position[i] = m.cutscene.position[i]; sp.target[i] = m.cutscene.target[i]; }
+      sp.fovDeg = m.cutscene.fovDeg;
+      return;
+    }
+    orbit += dt * 0.02;
+    const live = targets.some((e) => !e.destroyed) && m.phase !== 'done';
+    const rest = level.spotterRest ?? [0, -130];
+    const look = live ? aim() : [rest[0], level.terrain.heightAt(rest[0], rest[1]), rest[1]];
+    const R = 330, b = 0.2 + Math.sin(orbit) * 0.5;
+    sp.target[0] = look[0]; sp.target[1] = look[1] + 1; sp.target[2] = look[2];
+    sp.position[0] = look[0] + Math.sin(b) * R;
+    sp.position[2] = look[2] + Math.cos(b) * R;
+    sp.position[1] = Math.max(look[1], level.terrain.heightAt(sp.position[0], sp.position[2])) + 130;
+    sp.fovDeg = live ? 11 : 16;
+  }
+
   function dealtWith(e) {
     if (e.destroyed) return true;
     if (e.def.vehicle) return !e.v.operational || e.v.abandoned;
@@ -108,6 +130,7 @@ export function createMissions({ level, entities, state, emit }) {
       }
     }
     moveCamera();
+    spotterView(dt);
   }
 
   function finishScript() {
