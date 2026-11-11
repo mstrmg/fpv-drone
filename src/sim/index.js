@@ -4,7 +4,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { Quaternion, Vector3 } from 'three';
 import { FlightModel } from './flightModel.js';
 import { Wind } from './environment.js';
-import { createEntities } from './entities.js';
+import { createEntities, jamming } from './entities.js';
 import { addPropColliders, WireField } from './propColliders.js';
 import { createWalker } from './onFoot.js';
 import { createMissions } from './missions.js';
@@ -369,14 +369,70 @@ export async function createSim({ level, settings = {} }) {
       }
       occlusion = blocked > 0 ? Math.max(0.25, 1 - blocked / 15) : 1;
     }
+    if ((linkTick & 7) === 1) jam = jamAt(p);
+    l.jamming += (jam - l.jamming) * Math.min(1, dt / 0.3);
     const range = Math.max(0, 1 - (dist / LINK_RANGE_M) ** 2);
     const lowFly = Math.max(0, Math.min(1, (4 - agl) / 4)) * (0.25 + 0.75 * Math.min(1, dist / 120));
-    const target = range * (1 - 0.75 * lowFly) * occlusion;
+    const target = range * (1 - 0.75 * lowFly) * occlusion * (1 - 0.97 * l.jamming);
     l.signal += (target - l.signal) * Math.min(1, dt / 0.25);
     l.roll = Math.min(1, Math.max(0, (0.6 - l.signal) / 0.4)) ** 1.5;
     const lost = l.signal < 0.08;
     if (lost !== signalLost) { signalLost = lost; emit({ type: lost ? 'link_lost' : 'link_restored' }); }
     l.lost = lost;
+  }
+
+  // Jammers (an EW truck, `jammer: { range, power }` on its enemy def): drowns the link as you get
+  // closer, all of it inside ~100 m. Only in line of sight: a hill, a house or trees between the
+  // drone and its antennas soak most of it up, so you come in low behind cover.
+  let jam = 0;
+  const coverCache = new Map();
+  function cover(e) {
+    let c = coverCache.get(e.id);
+    if (!c) {
+      const R = e.jam.range ?? 500;
+      const near = (o) => Math.hypot(o.position[0] - e.x, o.position[2] - e.z) < R + 20;
+      c = { trees: level.objects.filter((o) => o.kind === 'tree' && near(o)), houses: level.objects.filter((o) => o.kind === 'building' && near(o)) };
+      coverCache.set(e.id, c);
+    }
+    return c;
+  }
+  function jamAt(p) {
+    let worst = 0;
+    const T = level.terrain;
+    for (const e of entities.list) {
+      if (!e.jam || !jamming(e)) continue;
+      const R = e.jam.range ?? 500, full = e.jam.full ?? 100;
+      const ax = e.x, ay = e.y + 6, az = e.z;  // top of the antenna mast
+      const d = Math.hypot(p.x - ax, p.y - ay, p.z - az);
+      if (d > R) continue;
+      let k = Math.min(1, ((R - d) / (R - full)) ** 1.3) * (e.jam.power ?? 1);
+      // Hills in between.
+      let blocked = 0;
+      for (let i = 1; i < 10; i++) {
+        const t = i / 10, x = ax + (p.x - ax) * t, z = az + (p.z - az) * t, y = ay + (p.y - ay) * t;
+        blocked = Math.max(blocked, T.heightAt(x, z) - y);
+      }
+      if (blocked > 0) k *= Math.max(0.05, 1 - blocked / 4);
+      // Houses and trees in between.
+      const dx = p.x - ax, dz = p.z - az, L2 = dx * dx + dz * dz || 1;
+      const { trees, houses } = cover(e);
+      for (const o of houses) {
+        const [ox, oy, oz] = o.position, [w, h, dd] = o.size;
+        const t = Math.max(0, Math.min(1, ((ox - ax) * dx + (oz - az) * dz) / L2));
+        if (t < 0.02 || t > 0.98) continue;
+        const sx = ax + dx * t, sz = az + dz * t, sy = ay + (p.y - ay) * t;
+        if (Math.hypot(sx - ox, sz - oz) < Math.min(w, dd) * 0.5 && sy < oy + h + 1) k *= 0.15;
+      }
+      for (const o of trees) {
+        const [ox, oy, oz] = o.position;
+        const t = Math.max(0, Math.min(1, ((ox - ax) * dx + (oz - az) * dz) / L2));
+        if (t < 0.02 || t > 0.98) continue;
+        const sx = ax + dx * t, sz = az + dz * t, sy = ay + (p.y - ay) * t;
+        if (Math.hypot(sx - ox, sz - oz) < o.radius * 0.9 && sy < oy + o.height) k *= 0.6;
+      }
+      worst = Math.max(worst, k);
+    }
+    return worst;
   }
 
   function updateWarheadArming() {
@@ -583,6 +639,7 @@ export async function createSim({ level, settings = {} }) {
     if (state.time < safeWarnUntil) w.push('WARHEAD SAFE');
     if (state.time < throttleWarnUntil) w.push('THROTTLE');
     if (fm.voltage / fm.batt.cells < 3.3 && fm.armed) w.push('LOW BATTERY');
+    if (!d.destroyed && state.link.jamming > 0.25) w.push('JAMMING');
   }
 
   respawn();

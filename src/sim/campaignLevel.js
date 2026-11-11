@@ -348,6 +348,14 @@ export function createCampaignLevel() {
   m.enemy('infantry', 'rifleman', NX - 1.6, NZ - 0.5, { yaw: Math.PI + 0.4, hold: true, mission: 'nest', patrol: [[NX - 1.6, NZ - 0.5], [NX - 3, NZ - 2]], idleTime: 10 });
   m.treeLine([NX - 40, NZ - 18], [NX + 50, NZ - 24], 9, [[NX, NZ - 20, 8]]);
 
+  // ---- Mission 7: the EW truck jamming us from behind the farm shed in the village ----------------
+  // Its antennas drown our link in line of sight (src/sim/index.js jamAt): about 550 m out it starts,
+  // inside ~110 m the picture is gone. Houses, the shed, trees and ground in between soak it up.
+  const EX = VX + 64, EZ = VZ - 36;
+  m.enemy('truck', 'ew', EX, EZ, { yaw: Math.PI / 2, waitFor: 'jammer', mission: 'jammer', jammer: { range: 550, full: 110, power: 1 } });
+  m.enemy('infantry', 'rifleman', EX - 6, EZ + 5, { yaw: 2.6, hold: true, patrol: [[EX - 6, EZ + 5], [EX + 8, EZ + 6]], idleTime: 7 });
+  m.enemy('infantry', 'rifleman', EX + 4, EZ - 6, { yaw: 0.3, hold: true, idleTime: 9 });
+
   // ---- Missions ---------------------------------------------------------------------------------
 
   const missions = [{
@@ -482,6 +490,22 @@ export function createCampaignLevel() {
       { after: 5, say: 'New team moved into the outpost, and the gun opened up on them too.', dur: 5,
         shot: { look: 'targets', range: 220, height: 90, bearing: 3.4, fov: 11, drift: 0.004 } },
       { say: 'Get it this time.', dur: 2 },
+    ],
+   }, {
+    id: 'jammer',
+    title: 'Jammer',
+    objective: 'Destroy the EW truck jamming our drones from the village',
+    intro: [
+      { after: 4, say: 'Every bird we sent toward the village this morning lost its picture.', dur: 4.5 },
+      { say: 'That\'s why. EW truck, behind the big farm shed. Bearing {brg}, {rng} metres.', dur: 5.5,
+        shot: { look: 'targets', range: 420, height: 160, bearing: 0.5, fov: 8, drift: 0.003 } },
+      { say: 'Those antennas drown your video in line of sight. Five hundred metres out it starts, close in you\'ve got nothing.', dur: 6.5,
+        shot: { look: 'targets', range: 160, height: 55, bearing: 1.0, fov: 10, drift: 0.005 } },
+      { say: 'So come in low. Keep houses, trees, the shed between you and it. Pop up at the last moment and dive.', dur: 6 },
+      { say: 'Hit the box on the back, or the mast. Kill the jamming and the picture comes back.', dur: 5 },
+    ],
+    outro: [
+      { after: 1.5, say: 'Picture\'s clean! Jammer\'s dead. Good work.', dur: 3.5 },
     ],
   }];
 

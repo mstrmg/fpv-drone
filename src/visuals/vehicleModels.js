@@ -750,6 +750,33 @@ function buildAtv() {
   };
 }
 
+// EW truck: Ural cab, a box body (kung) full of jamming gear, a telescopic mast with panel
+// antennas and a bunch of whips on the roof. Generator on the back.
+function buildEw() {
+  const hull = new Kit(), wheels = [], parts = {};
+  uralCab(hull);
+  hull.box('paint', 2.45, 2.0, 4.4, 0, 2.35, 1.6);                                  // kung body
+  hull.box('dark', 2.5, 0.08, 4.5, 0, 3.38, 1.6);                                   // roof edge
+  hull.box('dark', 0.7, 1.2, 0.04, 0.6, 2.2, 3.82);                                 // rear door
+  for (const sx of [-1, 1]) for (const z of [0.4, 1.6, 2.8]) hull.box('dark', 0.03, 0.35, 0.5, sx * 1.235, 2.7, z); // vents
+  hull.box('steel', 1.1, 0.7, 0.7, -0.5, 1.7, 3.6);                                 // generator
+  // Telescopic mast with a crossbar of panel antennas, and whips round the roof.
+  hull.cyl('steel', 0.07, 0.09, 4.2, 0.6, 5.45, 2.5, 0, 0, 0, 8);
+  hull.rod('steel', V(-0.3, 7.4, 2.5), V(1.5, 7.4, 2.5), 0.03, 5);
+  for (const x of [-0.25, 0.25, 0.95, 1.45]) hull.box('dark', 0.1, 0.55, 0.35, x, 7.4, 2.5);
+  for (const [x, z, h] of [[-1.0, 0.0, 2.2], [-0.4, 0.4, 2.6], [0.9, 0.0, 1.8], [-1.0, 3.2, 2.4], [1.0, 3.3, 2.0], [-0.2, 2.0, 1.6]]) {
+    hull.cyl('dark', 0.012, 0.02, h, x, 3.42 + h / 2, z, 0, 0, 0, 4);
+    hull.cyl('dark', 0.05, 0.05, 0.08, x, 3.44, z, 0, 0, 0, 6);
+  }
+  for (const sx of [-1, 1]) hull.cyl('steel', 0.1, 0.1, 1.0, sx * 1.0, 3.6, 1.0, 0, 0, HALF_PI, 8); // log-periodic booms
+  tyreWheels(wheels, 0.56, 0.38, 1.0, [-2.75, 0.95, 2.45], 0.56, 1);
+  return {
+    hull, wheels, parts, size: [2.5, 3.6, 7.4], engine: [0, 1.6, -2.7],
+    exhaust: [[1.2, 2.2, -0.7, 0, 1, 0], [-0.5, 2.1, 3.9, 0, 1, 0]], fires: [[0, 1.6, -2.7], [0, 2.4, 1.0], [0, 2.4, 2.6]],
+    tossOnDeath: [], sink: 0.28,
+  };
+}
+
 // Military dirt bike: one rider, olive paint, a bag strapped on the back.
 function buildMoto() {
   const hull = new Kit(), wheels = [], parts = {};
@@ -789,7 +816,7 @@ function buildMoto() {
 export const VEHICLE_BUILDERS = {
   tank: { t72: buildT72, t80: buildT80, t90: buildT90 },
   apc: { btr: buildBtr, bmp: buildBmp, mtlb: buildMtlb },
-  truck: { ural: buildUral, kamaz: buildKamaz, fuel: buildFuel },
+  truck: { ural: buildUral, kamaz: buildKamaz, fuel: buildFuel, ew: buildEw },
   light: { uaz: buildUaz, pickup: buildPickup, technical: buildTechnical, atv: buildAtv, moto: buildMoto },
 };
 

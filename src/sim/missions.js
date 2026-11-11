@@ -27,6 +27,8 @@
 
 const SPEAKER = 'SASHA';
 
+import { jamming } from './entities.js';
+
 export function createMissions({ level, entities, state, emit }) {
   const list = level.missions ?? [];
   const m = {
@@ -248,6 +250,7 @@ export function createMissions({ level, entities, state, emit }) {
 
   function dealtWith(e) {
     if (e.destroyed) return true;
+    if (e.jam) return !jamming(e);
     if (e.def.vehicle) return !e.v.operational || e.v.abandoned;
     return e.cond === 'down' || e.cond === 'crawling' || e.cond === 'dead';
   }

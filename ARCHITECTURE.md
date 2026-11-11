@@ -109,6 +109,9 @@ Hitboxes: vehicles are compound boxes per variant (HIT_SHAPES: hull, turret, gun
 Level enemy defs may carry `speed` (m/s along the patrol), `route: true` (one way: past the last point the unit has
 escaped, status `'escaped'`, and the visuals hide it) and `waitFor: <mission id>` (parked until that mission starts;
 `'alert'`: until it hears the drone, then 4 s to start up and it drives off).
+An enemy def may carry `jammer: { range, full, power }` (an EW truck, variant `truck.ew`): once it is switched on (`waitFor`
+its mission) it drowns the link in line of sight, fully inside `full` m; ground, houses and trees in between block most of it.
+`state.link.jamming` 0..1 and an OSD `JAMMING` warning. Its mission counts it dealt with when the jamming stops.
 Campaign props: `camoNets: [{x, z, yaw, w, d, h}]` (net over a vehicle), `mortars: [{x, z, yaw}]` (tube + pit),
 `friendlies: [{x, z, yaw}]` (our men in a trench; `state.mission.casualties` of them are down).
 Missions may set `rough` (only a rough fix until the drone is close), `mortar` (shells our line: `mortar_fire` at the tube,

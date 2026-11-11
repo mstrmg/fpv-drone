@@ -112,6 +112,11 @@ export const VARIANTS = {
   truck: {
     ural: {},                                                // Ural-4320 style 6x6 cargo truck
     kamaz: { size: [2.5, 3.1, 7.8], run: 16, blast: 0.85 },  // KamAZ-5350 style, quicker
+    ew: {                                                    // electronic-warfare truck: a box body full of jammers, antennas on top
+      size: [2.5, 3.6, 7.4], run: 11, walk: 5,
+      seats: [seat('driver', [-0.5, 0.55, -0.7], 0.6, 0.2), seat('troop', [0.5, 0.55, -0.7], 0.6, 0.1), seat('troop', [0, 0.6, 1.4], 0.8, 0)],
+      parts: { engine: part([0, 0.4, -0.75], 0.9), fuel: part([0.5, 0.25, -0.05], 0.6), ew: part([0, 0.62, 0.25], 1.3), mast: part([0, 0.95, 0.45], 0.6, true) },
+    },
     fuel: {                                                  // tanker: one hit and it goes up
       size: [2.5, 3.0, 8.0], run: 11, walk: 5,
       seats: [seat('driver', [-0.5, 0.45, -0.75], 0.6, 0.2)],
@@ -186,7 +191,15 @@ const HIT_SHAPES = {
   technical: [{ c: [0, 0.26, 0], h: [0.5, 0.26, 0.5] }, { c: [0, 0.68, -0.12], h: [0.47, 0.15, 0.19] }, { c: [0, 0.75, 0.27], h: [0.15, 0.2, 0.1] }],
   atv: [{ c: [0, 0.4, 0], h: [0.5, 0.4, 0.5] }],
   moto: [{ c: [0, 0.4, 0], h: [0.35, 0.4, 0.5] }],
+  ew: [{ c: [0, 0.3, 0], h: [0.5, 0.3, 0.5] }, { c: [0, 0.68, -0.38], h: [0.47, 0.17, 0.11] }, { c: [0, 0.65, 0.2], h: [0.49, 0.25, 0.3] }],
 };
+
+// A jammer is on while its truck still works and the jamming gear in the box body is intact.
+export function jamming(e) {
+  if (!e.jam || !e.go || e.destroyed) return false;
+  const v = e.v;
+  return v.operational && !v.abandoned && v.comps.ew?.state !== 'destroyed' && v.comps.mast?.state !== 'destroyed';
+}
 // Infantry by posture: standing, lying (prone, crawling, down, dead) and sitting on a vehicle.
 const INF_SHAPES = {
   stand: { c: [0, 0.9, 0], h: [0.25, 0.9, 0.2] },
@@ -287,6 +300,7 @@ export function createEntities(ctx) {
       route: !!def.route,             // one way: at the last point it has got away (escaped)
       waitFor: def.waitFor ?? null,   // parked until that mission starts (missions.js sets go); 'alert': until it hears the drone
       go: false, escaped: false,
+      jam: def.jammer ?? null,        // { range, power }: jams our link (src/sim/index.js) once its mission starts
       x: 0, z: 0, y: 0, yaw: 0, speed: 0, pitch: 0, roll: 0, mult: 1,
       health: 1, status: 'idle', destroyed: false, onFire: false, fireUntil: 0,
       wp: 0, waitUntil: 0, alerted: false, noticeT: 0, reactAfter: 0.6 + rand() * 1.0, calmT: 0,
