@@ -6,40 +6,70 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Euler, Quaternion, Vector3 } from 'three';
 import { JET_REACH_M } from './warhead.js';
+import {
+  initVehicle, vehicleHealth, hatchState, evaluateVehicle, vehicleHit, tickVehicle,
+  initInfantry, infantryMobility, infantryHealth, evaluateInfantry, infantryHit, tickInfantry,
+} from './damageModel.js';
 
 // armour is mm of rolled steel equivalent per zone, used against shaped-charge jets.
-// blast / frag are how much of the (0..1) blast / fragment intensity turns into health loss.
+// blast / frag are how much of the (0..1) blast / fragment intensity turns into health loss (infantry).
 // `era` (reactive armour) cuts the jet's penetration on the front and sides.
+// seats / parts place the crew and the components inside the hull (see damageModel.js):
+//   seat = { role, p:[fx,fy,fz], exposure, visible }, part = { p:[fx,fy,fz], r, external? }
+//   p is a fraction of the half width, of the height, and of the half length (−1 = nose).
+// The *Blast / *Frag factors say how much outside blast / fragments get to the crew and parts.
 // Each kind has base stats; VARIANTS override them (the first variant of a kind is its default).
-const SPOT = (name, position, radius, mult) => ({ name, position, radius, mult });
+const seat = (role, p, exposure, visible = 0) => ({ role, p, exposure, visible });
+const part = (p, r, external = false) => ({ p, r, external });
+
+const ARMOURED = { // shared by tanks and APCs: sealed crew, only the ones in hatches are exposed
+  crewShield: 0.2, opticsFrag: 0.3, engineFrag: 0, fuelFrag: 0.02, engineFire: 0.3, fuelFire: 0.25,
+};
 
 export const ENTITY_TYPES = {
   infantry: {
     size: [0.5, 1.8, 0.4], blast: 1.0, frag: 1.25, jetBase: 1, armour: { front: 1, side: 1, rear: 1, top: 1 },
-    walk: 1.4, run: 5.2, turnRate: 6, accel: 6, hearing: 30, weakSpots: [], cookoff: null, vehicle: false, locomotion: 'foot',
+    walk: 1.4, run: 5.2, turnRate: 6, accel: 6, hearing: 30, cookoff: null, vehicle: false, locomotion: 'foot',
+    seats: [], parts: {},
   },
-  light: { // jeeps, pickups: thin-skinned and fast
+  light: { // jeeps, pickups: thin-skinned, open, and fast
     size: [1.8, 1.9, 4.1], blast: 1.0, frag: 0.35, jetBase: 1, armour: { front: 3, side: 2, rear: 2, top: 2 },
     walk: 9, run: 22, turnRate: 1.8, accel: 6, hearing: 30, vehicle: true, locomotion: 'wheels',
-    weakSpots: [SPOT('engine', [0, 0.9, -1.5], 0.8, 1.5), SPOT('fuel', [0, 0.6, 1.4], 0.6, 1.8)],
+    seats: [seat('driver', [-0.5, 0.5, -0.15], 0.9, 1), seat('troop', [0.5, 0.5, -0.15], 0.9, 1), seat('troop', [-0.5, 0.5, 0.55], 0.9, 1), seat('troop', [0.5, 0.5, 0.55], 0.9, 1)],
+    parts: { engine: part([0, 0.45, -0.75], 0.6), fuel: part([0, 0.25, 0.8], 0.5) },
+    crewBlast: 0.9, crewFrag: 1.6, crewShield: 1, gearBlast: 0.5, opticsFrag: 0, engineBlast: 0.45, engineFrag: 0.5, fuelFrag: 0.5,
+    engineFire: 0.3, fuelFire: 0.5, fuelExplode: 0.15,
     cookoff: { chance: 0.25, delay: [1, 2.5], kind: 'vehicle', chargeKg: 0.1, radius: 2, fragmentRadius: 6, fragmentLethality: 0.2 },
   },
   truck: {
     size: [2.5, 2.9, 7.0], blast: 0.9, frag: 0.18, jetBase: 1, armour: { front: 6, side: 3, rear: 3, top: 3 },
     walk: 6, run: 14, turnRate: 0.9, accel: 3.5, hearing: 25, vehicle: true, locomotion: 'wheels',
-    weakSpots: [SPOT('engine', [0, 1.2, -2.8], 1.0, 1.6), SPOT('fuel', [1.2, 0.9, 0.5], 0.8, 2.0)],
+    seats: [seat('driver', [-0.5, 0.55, -0.7], 0.6, 0.2), seat('troop', [0.5, 0.55, -0.7], 0.6, 0.1)],
+    parts: { engine: part([0, 0.45, -0.75], 0.8), fuel: part([0.9, 0.25, 0.1], 0.6) },
+    crewBlast: 0.7, crewFrag: 1.0, crewShield: 0.5, gearBlast: 0.3, opticsFrag: 0, engineBlast: 0.25, engineFrag: 0.3, fuelFrag: 0.4,
+    engineFire: 0.25, fuelFire: 0.4, fuelExplode: 0.15,
     cookoff: { chance: 0.5, delay: [1.2, 3], kind: 'vehicle', chargeKg: 0.3, radius: 3, fragmentRadius: 10, fragmentLethality: 0.3 },
   },
   apc: {
     size: [3.0, 2.4, 7.0], blast: 0.35, frag: 0.03, jetBase: 0.85, armour: { front: 100, side: 40, rear: 25, top: 15 },
     walk: 5, run: 10, turnRate: 0.8, accel: 3, hearing: 20, turret: 1.5, vehicle: true, locomotion: 'tracks',
-    weakSpots: [SPOT('engine', [0, 1.2, 2.8], 1.2, 1.8), SPOT('top', [0, 2.3, 0], 1.8, 1.4)],
+    seats: [seat('driver', [-0.55, 0.45, -0.75], 0.3, 0.2), seat('commander', [0.45, 0.85, -0.2], 0.7, 0.4), seat('troop', [-0.5, 0.5, 0.35], 0.15), seat('troop', [0.5, 0.5, 0.6], 0.15)],
+    parts: {
+      engine: part([0, 0.45, 0.8], 1.0), fuel: part([0.7, 0.25, 0.4], 0.6), ammo: part([0, 0.6, -0.15], 0.5),
+      gun: part([0, 0.95, -0.45], 0.3, true), turret: part([0, 0.9, -0.2], 0.5), optics: part([0.15, 1.0, -0.3], 0.25, true),
+    },
+    ...ARMOURED, crewBlast: 0.12, crewFrag: 0.25, gearBlast: 0.1, engineBlast: 0.08,
     cookoff: { chance: 0.75, delay: [1.5, 4], kind: 'ammo', chargeKg: 0.8, radius: 4, fragmentRadius: 18, fragmentLethality: 0.6 },
   },
   tank: {
     size: [3.4, 2.4, 7.0], blast: 0.12, frag: 0, jetBase: 0.7, armour: { front: 700, side: 300, rear: 120, top: 60 },
     walk: 4, run: 6, turnRate: 0.6, accel: 2, hearing: 15, turret: 1.0, vehicle: true, locomotion: 'tracks',
-    weakSpots: [SPOT('ammo', [0, 1.8, 0], 1.0, 2.5), SPOT('engine', [0, 1.3, 3.0], 1.3, 2.2), SPOT('top', [0, 2.4, -0.3], 1.6, 1.6)],
+    seats: [seat('driver', [0, 0.4, -0.78], 0.25, 0.15), seat('gunner', [-0.3, 0.78, 0.0], 0.2), seat('commander', [0.3, 0.95, 0.05], 0.8, 0.5)],
+    parts: {
+      ammo: part([0, 0.62, 0], 0.8), engine: part([0, 0.45, 0.78], 1.1), fuel: part([0.55, 0.4, 0.45], 0.7),
+      turret: part([0, 0.8, 0], 0.7), gun: part([0, 0.8, -1.0], 0.3, true), optics: part([0.3, 1.0, -0.15], 0.3, true),
+    },
+    ...ARMOURED, crewBlast: 0.03, crewFrag: 0.5, gearBlast: 0.15, engineBlast: 0.05, engineFire: 0.35,
     cookoff: { chance: 0.9, delay: [2, 5], kind: 'ammo', chargeKg: 1.8, radius: 6, fragmentRadius: 25, fragmentLethality: 0.7 },
   },
 };
@@ -50,33 +80,53 @@ export const VARIANTS = {
     mg: { walk: 1.2, run: 4.5, hearing: 28 },                // machine gunner, weighed down
     rpg: { walk: 1.3, run: 4.8 },                            // anti-tank launcher
     officer: { hearing: 38, walk: 1.5, run: 5.4 },           // alert: his shout warns the squad from further away
+    crew: { walk: 1.4, run: 5.0, hearing: 20 },              // a bailed-out vehicle crewman
   },
   light: {
     uaz: {},                                                 // UAZ-469 style jeep
-    pickup: { size: [2.0, 1.9, 5.2], run: 20, frag: 0.3 },   // civilian-style pickup truck
-    technical: { size: [2.0, 2.3, 5.2], run: 19, turret: 2.0, hearing: 25 }, // pickup with a mounted heavy MG
+    pickup: {                                                // civilian-style pickup truck
+      size: [2.0, 1.9, 5.2], run: 20, frag: 0.3,
+      seats: [seat('driver', [-0.5, 0.5, -0.4], 0.9, 1), seat('troop', [0.5, 0.5, -0.4], 0.9, 1)],
+      parts: { engine: part([0, 0.45, -0.8], 0.6), fuel: part([0, 0.25, 0.4], 0.5) },
+    },
+    technical: {                                             // pickup with a mounted heavy MG
+      size: [2.0, 2.3, 5.2], run: 19, turret: 2.0, hearing: 25,
+      seats: [seat('driver', [-0.5, 0.45, -0.4], 0.9, 1), seat('troop', [0.5, 0.45, -0.4], 0.9, 1), seat('gunner', [0, 0.9, 0.45], 1.0, 1)],
+      parts: { engine: part([0, 0.4, -0.8], 0.6), fuel: part([0, 0.2, 0.4], 0.5), gun: part([0, 0.95, 0.4], 0.4, true) },
+    },
   },
   truck: {
     ural: {},                                                // Ural-4320 style 6x6 cargo truck
     kamaz: { size: [2.5, 3.1, 7.8], run: 16, blast: 0.85 },  // KamAZ-5350 style, quicker
     fuel: {                                                  // tanker: one hit and it goes up
       size: [2.5, 3.0, 8.0], run: 11, walk: 5,
-      weakSpots: [SPOT('fuel', [0, 1.6, 0.8], 1.8, 2.2), SPOT('engine', [0, 1.2, -3.2], 1.0, 1.4)],
+      seats: [seat('driver', [-0.5, 0.45, -0.75], 0.6, 0.2)],
+      parts: { engine: part([0, 0.4, -0.8], 0.9), fuel: part([0, 0.6, 0.15], 1.5) },
+      fuelFire: 0.9, fuelExplode: 0.9, fuelFrag: 0.8,
       cookoff: { chance: 0.95, delay: [0.5, 1.5], kind: 'vehicle', chargeKg: 1.2, radius: 7, fragmentRadius: 15, fragmentLethality: 0.4 },
     },
   },
   apc: {
     btr: { // BTR-80 style 8x8: fast, wheeled, very thin armour
       size: [2.9, 2.4, 7.6], locomotion: 'wheels', armour: { front: 15, side: 10, rear: 10, top: 7 },
-      blast: 0.5, frag: 0.08, walk: 7, run: 12, turnRate: 0.9, hearing: 22,
+      blast: 0.5, frag: 0.08, walk: 7, run: 12, turnRate: 0.9, hearing: 22, crewBlast: 0.3, crewFrag: 0.5, gearBlast: 0.25,
+      seats: [seat('driver', [-0.55, 0.5, -0.8], 0.3, 0.2), seat('commander', [0.45, 0.55, -0.8], 0.3, 0.2), seat('troop', [-0.5, 0.5, 0.0], 0.15), seat('troop', [0.5, 0.5, 0.4], 0.15)],
+      parts: {
+        engine: part([0, 0.45, 0.8], 1.0), fuel: part([0.7, 0.25, 0.4], 0.6), ammo: part([0, 0.6, -0.2], 0.5),
+        gun: part([0, 0.95, -0.4], 0.3, true), turret: part([0, 0.9, -0.3], 0.5), optics: part([0.15, 1.0, -0.35], 0.25, true),
+      },
       cookoff: { chance: 0.6, delay: [1.5, 4], kind: 'ammo', chargeKg: 0.6, radius: 3.5, fragmentRadius: 15, fragmentLethality: 0.5 },
     },
     bmp: { // BMP-2 style tracked IFV
       size: [3.2, 2.2, 6.7], armour: { front: 60, side: 25, rear: 20, top: 15 },
+      seats: [seat('driver', [-0.55, 0.45, -0.8], 0.3, 0.2), seat('commander', [0.35, 0.9, -0.1], 0.7, 0.4), seat('gunner', [-0.35, 0.9, -0.1], 0.5, 0.1), seat('troop', [-0.5, 0.5, 0.45], 0.15), seat('troop', [0.5, 0.5, 0.6], 0.15)],
       cookoff: { chance: 0.85, delay: [1.5, 4], kind: 'ammo', chargeKg: 0.9, radius: 4, fragmentRadius: 18, fragmentLethality: 0.6 },
     },
     mtlb: { // MT-LB style light tracked carrier, no real turret
       size: [2.9, 2.0, 6.5], armour: { front: 14, side: 10, rear: 10, top: 7 }, blast: 0.6, frag: 0.1, turret: 0, walk: 6, run: 11,
+      crewBlast: 0.3, crewFrag: 0.5,
+      seats: [seat('driver', [-0.5, 0.5, -0.75], 0.3, 0.2), seat('commander', [0.5, 0.55, -0.75], 0.3, 0.3), seat('troop', [-0.5, 0.5, 0.0], 0.15), seat('troop', [0.5, 0.5, 0.3], 0.15), seat('troop', [0, 0.5, 0.6], 0.15)],
+      parts: { engine: part([0, 0.4, -0.2], 0.9), fuel: part([0.7, 0.25, 0.4], 0.6), ammo: part([0, 0.5, 0.75], 0.4) },
       cookoff: { chance: 0.4, delay: [2, 5], kind: 'ammo', chargeKg: 0.3, radius: 3, fragmentRadius: 12, fragmentLethality: 0.4 },
     },
   },
@@ -107,6 +157,7 @@ export function resolveType(kind, variant) {
 const FIRE_SECONDS = 30;
 const PRONE_SECONDS = 8;
 const CALM_AFTER = 4;
+const CRAWL_SPEED = 0.45;
 
 const _q = new Quaternion();
 const _qi = new Quaternion();
@@ -119,9 +170,11 @@ function lcg(seed) {
 }
 const wrap = (a) => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
 const approach = (cur, want, step) => (Math.abs(want - cur) <= step ? want : cur + Math.sign(want - cur) * step);
+const aliveCrew = (c) => c.state === 'ok' || c.state === 'wounded';
 
 /**
- * ctx = { world, level, emit(e), damage (DamageRegistry), registerCollider(handle, id), explode(spec) }
+ * ctx = { world, level, emit(e), damage (DamageRegistry), registerCollider(handle, id),
+ *         unregisterCollider?(handle), explode(spec) }
  */
 export function createEntities(ctx) {
   const { world, level } = ctx;
@@ -131,26 +184,53 @@ export function createEntities(ctx) {
   const states = [];
   let time = 0;
   let nextId = 0;
+  let nextCrewId = 0;
+
+  // The damage model reports through `env`. Events raised while a hit is being resolved are held
+  // back until the sim has emitted the `hit` itself, so consumers see hit → consequences.
+  let cur = null;
+  let holding = false;
+  let held = [];
+  const env = {
+    get time() { return time; },
+    rand,
+    emit: (ev) => { if (holding) held.push(ev); else ctx.emit(ev); },
+    toLocal: (p) => { const l = toLocal(cur, p); return [l.x, l.y, l.z]; },
+    dirLocal: (d) => {
+      _qi.set(cur.q[0], cur.q[1], cur.q[2], cur.q[3]).invert();
+      const l = _loc.set(d[0], d[1], d[2]).applyQuaternion(_qi);
+      return [l.x, l.y, l.z];
+    },
+  };
 
   function makeState(e) {
+    const v = e.def.vehicle;
     return {
       id: e.id, kind: e.kind, variant: e.def.variant, locomotion: e.def.locomotion, position: [0, 0, 0], quaternion: [0, 0, 0, 1], velocity: [0, 0, 0],
-      size: [...e.def.size], health: 1, status: 'idle', turretYaw: 0, onFire: false, damage: 'none',
-      weakSpots: e.def.weakSpots.map((w) => ({ name: w.name, position: [...w.position], radius: w.radius })),
+      size: [...e.def.size], health: 1, status: 'idle', turretYaw: 0, onFire: false, damage: 'none', weakSpots: [],
+      ...(v ? {
+        kill: 'none', mobility: 'ok', firepower: 'ok', operational: true, crewTotal: 0, crewAlive: 0, crew: [],
+        hatches: { driver: false, commander: false, gunner: false, rear: false },
+        bailing: false, abandoned: false, fire: 'none', smoke: 'none', components: {},
+      } : {
+        condition: 'ok', wounds: { head: 1, torso: 1, armL: 1, armR: 1, legL: 1, legR: 1 }, mobility: 1, bleeding: false,
+        ...(e.fromVehicle ? { fromVehicle: e.fromVehicle } : {}),
+      }),
     };
   }
 
-  function spawn(def) {
+  function spawn(def, extra = {}) {
     const type = resolveType(def.kind, def.variant);
-    const id = `e${nextId++}`;
+    const dynamic = !!extra.dynamic;
+    const id = dynamic ? `c${nextCrewId++}` : `e${nextId++}`;
     const e = {
-      id, kind: def.kind, def: type,
+      id, kind: def.kind, def: type, dynamic, fromVehicle: extra.fromVehicle,
       spawn: { x: def.position[0], z: def.position[1], yaw: def.yaw ?? 0 },
       patrol: def.patrol ?? null, idleTime: def.idleTime ?? (type.vehicle ? 2 : 4),
-      x: 0, z: 0, y: 0, yaw: 0, speed: 0, pitch: 0, roll: 0,
-      health: 1, status: 'idle', destroyed: false, onFire: false, fireUntil: 0, cookoffAt: -1, cookoffDone: false,
+      x: 0, z: 0, y: 0, yaw: 0, speed: 0, pitch: 0, roll: 0, mult: 1,
+      health: 1, status: 'idle', destroyed: false, onFire: false, fireUntil: 0,
       wp: 0, waitUntil: 0, alerted: false, noticeT: 0, reactAfter: 0.6 + rand() * 1.0, calmT: 0,
-      mode: 'patrol', proneUntil: 0, fleeHeading: 0, turretYaw: 0, s: null, body: null, collider: null,
+      mode: 'patrol', proneUntil: 0, fleeHeading: 0, turretYaw: 0, s: null, body: null, collider: null, v: null, w: null,
     };
     e.body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
     const [w, h, d] = type.size;
@@ -172,12 +252,24 @@ export function createEntities(ctx) {
     return e;
   }
 
+  function remove(e) {
+    ctx.damage.unregister(e.id);
+    ctx.unregisterCollider?.(e.collider.handle);
+    world.removeRigidBody(e.body);
+    list.splice(list.indexOf(e), 1);
+    states.splice(states.indexOf(e.s), 1);
+  }
+
   function place(e) {
-    e.x = e.spawn.x; e.z = e.spawn.z; e.yaw = e.spawn.yaw; e.speed = 0; e.turretYaw = 0;
-    e.health = 1; e.status = 'idle'; e.destroyed = false; e.onFire = false; e.fireUntil = 0;
-    e.cookoffAt = -1; e.cookoffDone = false; e.wp = 0; e.waitUntil = time + rand() * 3;
+    e.x = e.spawn.x; e.z = e.spawn.z; e.yaw = e.spawn.yaw; e.speed = 0; e.turretYaw = 0; e.mult = 1;
+    e.status = 'idle'; e.destroyed = false; e.onFire = false; e.fireUntil = 0;
+    e.wp = 0; e.waitUntil = time + rand() * 3;
     e.alerted = false; e.noticeT = 0; e.calmT = 0; e.mode = 'patrol'; e.proneUntil = 0;
     e.reactAfter = 0.6 + rand() * 1.0;
+    if (e.def.vehicle) {
+      initVehicle(e, rand); e.health = vehicleHealth(e);
+      e.s.weakSpots = Object.entries(e.v.comps).map(([name, c]) => ({ name, position: c.position, radius: c.radius }));
+    } else { initInfantry(e); e.health = 1; }
     ground(e);
     sync(e);
   }
@@ -206,11 +298,26 @@ export function createEntities(ctx) {
     s.quaternion[0] = _q.x; s.quaternion[1] = _q.y; s.quaternion[2] = _q.z; s.quaternion[3] = _q.w;
     s.velocity[0] = -Math.sin(e.yaw) * e.speed; s.velocity[1] = 0; s.velocity[2] = -Math.cos(e.yaw) * e.speed;
     s.health = Math.max(0, e.health);
-    s.status = e.destroyed ? 'destroyed' : e.status;
     s.turretYaw = e.turretYaw;
-    s.onFire = e.onFire;
-    s.damage = e.destroyed || e.health < 0.35 ? 'heavy' : e.health < 0.7 ? 'light' : 'none';
-    if (!e.def.vehicle) s.damage = 'none';
+    if (e.def.vehicle) {
+      const v = e.v;
+      const burning = e.destroyed ? time < e.fireUntil : v.fire !== 'none';
+      s.status = e.destroyed ? 'destroyed' : (v.abandoned || !v.operational) ? 'disabled' : e.status;
+      s.onFire = burning;
+      s.fire = burning ? (v.fire === 'none' ? 'full' : v.fire) : 'none';
+      s.smoke = e.destroyed ? (burning ? 'heavy' : 'light') : v.smoke;
+      s.damage = e.destroyed || e.health < 0.35 ? 'heavy' : e.health < 0.7 ? 'light' : 'none';
+      s.kill = v.kill; s.mobility = v.mobility; s.firepower = v.firepower; s.operational = v.operational && !e.destroyed;
+      s.crewTotal = v.crew.length; s.crewAlive = v.crewAlive; s.crew = v.crew; s.components = v.comps;
+      s.bailing = v.bailing; s.abandoned = v.abandoned;
+      hatchState(v, s.hatches);
+    } else {
+      const c = e.w;
+      s.status = e.cond === 'dead' ? 'destroyed' : (e.cond === 'ok' ? e.status : e.cond);
+      s.onFire = false; s.damage = 'none';
+      s.condition = e.cond; s.mobility = infantryMobility(e); s.bleeding = e.bleeding;
+      s.wounds.head = c.head; s.wounds.torso = c.torso; s.wounds.armL = c.armL; s.wounds.armR = c.armR; s.wounds.legL = c.legL; s.wounds.legR = c.legR;
+    }
   }
 
   function toLocal(e, p) {
@@ -225,47 +332,30 @@ export function createEntities(ctx) {
     return Math.hypot(dx, dy, dz);
   }
 
-  function zoneOf(e, l) {
-    const [w, h, d] = e.def.size;
-    if (l.y > h * 0.85) return 'top';
-    if (l.z > d * 0.3) return 'rear';
-    if (Math.abs(l.x) > w * 0.3) return 'side';
-    return 'front';
-  }
-
   function applyDamage(e, hit) {
     if (e.destroyed) return 0;
     const def = e.def;
-    const l = toLocal(e, hit.position).clone();
-    const proneInf = !def.vehicle && e.status === 'prone';
-    const blastDmg = hit.blast * def.blast * (proneInf ? 0.6 : 1);
-    const fragDmg = hit.fragments * def.frag * (proneInf ? 0.4 : 1);
-    let jetDmg = 0;
-    if (hit.shaped && def.jetBase > 0 && boxDistance(e, hit.position) <= JET_REACH_M) {
-      const zone = zoneOf(e, l);
-      const pen = hit.penetrationMm * (def.era && zone !== 'top' ? 1 - def.era : 1); // reactive armour disrupts the jet
-      jetDmg = def.jetBase * Math.min(1, pen / Math.max(1, def.armour[zone]));
+    cur = e; holding = true; held = [];
+    let r;
+    if (def.vehicle) {
+      const jet = hit.shaped && hit.penetrationMm > 0 && hit.distance <= JET_REACH_M;
+      r = vehicleHit(e, hit, env, jet);
+      e.health = vehicleHealth(e);
+    } else {
+      r = infantryHit(e, hit, env);
+      e.health = infantryHealth(e);
+      e.fleeHeading = Math.atan2(e.x - hit.position[0], e.z - hit.position[2]) + (rand() - 0.5) * 0.6;
     }
-    let total = blastDmg + fragDmg + jetDmg;
-    if (total <= 0.001) return 0;
-
-    let weak = null, mult = 1;
-    if (jetDmg > 0 || hit.blast > 0.3) {
-      for (const w of def.weakSpots) {
-        const d = Math.hypot(l.x - w.position[0], l.y - w.position[1], l.z - w.position[2]);
-        if (d <= w.radius + 0.8 && w.mult > mult) { mult = w.mult; weak = w.name; }
-      }
-    }
-    // Weak spots matter most for the shaped-charge jet; plain blast only gets a fraction of the bonus.
-    if (jetDmg <= 0) mult = 1 + (mult - 1) * 0.4;
-    total = Math.min(1.2, total * mult);
-    const dealt = Math.min(e.health, total);
-    e.health -= total;
-    const source = jetDmg >= blastDmg && jetDmg >= fragDmg ? 'jet' : fragDmg > blastDmg ? 'fragments' : 'blast';
+    holding = false;
+    const events = held; held = [];
     if (!e.alerted) alert(e);
-    const result = { damage: dealt, source, ...(weak ? { weakSpot: weak } : {}) };
-    if (e.health <= 0) result.after = () => destroy(e, source, weak);
-    else if (def.vehicle) sync(e);
+    sync(e);
+    const result = { damage: r.damage, source: r.source, extra: r.extra };
+    if (def.vehicle && r.component) result.weakSpot = r.component;
+    result.after = () => {
+      for (const ev of events) ctx.emit(ev);
+      if (!def.vehicle && e.cond === 'dead') killInfantry(e, r.source);
+    };
     return result;
   }
 
@@ -281,36 +371,73 @@ export function createEntities(ctx) {
     }
   }
 
-  function destroy(e, cause, weak) {
+  function killInfantry(e, cause) {
     if (e.destroyed) return;
     e.destroyed = true; e.speed = 0; e.health = 0;
-    const def = e.def;
-    if (def.vehicle) {
-      e.onFire = true; e.fireUntil = time + FIRE_SECONDS;
-      const c = def.cookoff;
-      // Ammo hits cook off almost always; otherwise roll the dice.
-      if (c && (weak === 'ammo' || rand() < c.chance)) e.cookoffAt = time + c.delay[0] + rand() * (c.delay[1] - c.delay[0]);
-    }
     sync(e);
-    ctx.emit({ type: 'entity_destroyed', entityId: e.id, kind: e.kind, position: [e.x, e.y + def.size[1] / 2, e.z], cause });
+    ctx.emit({ type: 'entity_destroyed', entityId: e.id, kind: e.kind, position: [e.x, e.y + e.def.size[1] / 2, e.z], cause });
   }
 
-  function cookoff(e) {
-    e.cookoffDone = true;
-    const c = e.def.cookoff;
-    ctx.explode({
-      position: [e.x, e.y + e.def.size[1] / 2, e.z], objectId: e.id, kind: c.kind, chargeKg: c.chargeKg, radius: c.radius,
-      fragmentRadius: c.fragmentRadius, fragmentLethality: c.fragmentLethality, ignoreHandle: e.body.handle, turretToss: !!c.turretToss,
-    });
-  }
+  // ---- vehicle events from the damage model ----------------------------
+
+  const hooks = {
+    cookoff(e) {
+      const v = e.v, c = e.def.cookoff;
+      v.cookoffDone = true; v.catastrophic = true;
+      e.destroyed = true; e.speed = 0; e.fireUntil = time + FIRE_SECONDS; e.health = 0;
+      for (const s of v.crew) if (aliveCrew(s)) { s.state = 'dead'; ctx.emit({ type: 'crew_hit', entityId: e.id, role: s.role, state: 'dead' }); }
+      evaluateVehicle(e, env);
+      sync(e);
+      if (c) {
+        ctx.explode({
+          position: [e.x, e.y + e.def.size[1] / 2, e.z], objectId: e.id, kind: c.kind, chargeKg: c.chargeKg, radius: c.radius,
+          fragmentRadius: c.fragmentRadius, fragmentLethality: c.fragmentLethality, ignoreHandle: e.body.handle, turretToss: !!c.turretToss,
+        });
+      }
+      ctx.emit({ type: 'entity_destroyed', entityId: e.id, kind: e.kind, position: [e.x, e.y + e.def.size[1] / 2, e.z], cause: 'cookoff' });
+    },
+    burnedOut(e) {
+      const v = e.v;
+      v.burnedOut = true;
+      e.destroyed = true; e.speed = 0; e.fireUntil = time + FIRE_SECONDS * 0.5; e.health = 0;
+      for (const s of v.crew) if (aliveCrew(s)) { s.state = 'dead'; ctx.emit({ type: 'crew_hit', entityId: e.id, role: s.role, state: 'dead' }); }
+      evaluateVehicle(e, env);
+      sync(e);
+      ctx.emit({ type: 'entity_destroyed', entityId: e.id, kind: e.kind, position: [e.x, e.y + e.def.size[1] / 2, e.z], cause: 'fire' });
+    },
+    bailOut(e) {
+      const v = e.v;
+      const out = v.crew.filter(aliveCrew);
+      if (!out.length) return;
+      ctx.emit({ type: 'crew_bailout', entityId: e.id, count: out.length });
+      const [w, h, d] = e.def.size;
+      const sinY = Math.sin(e.yaw), cosY = Math.cos(e.yaw);
+      out.forEach((s, i) => {
+        // Out of the hatch to the side of the hull, spread along it.
+        const side = s.position[0] >= 0 ? 1 : -1;
+        const lx = side * (w / 2 + 0.8), lz = s.position[2] + (i - out.length / 2) * 0.3;
+        const x = e.x + lx * cosY + lz * sinY, z = e.z - lx * sinY + lz * cosY;
+        const away = Math.atan2(-(x - e.x), -(z - e.z));
+        const man = spawn({ kind: 'infantry', variant: 'crew', position: [x, z], yaw: away }, { dynamic: true, fromVehicle: e.id });
+        man.s.fromVehicle = e.id;
+        if (s.state === 'wounded') { man.w.armR = 0.4; man.w.legL = 0.55; man.w.torso = 0.7; evaluateInfantry(man, env); sync(man); }
+        man.alerted = true; man.reactAfter = 0;
+        man.mode = rand() < 0.35 ? 'prone' : 'flee';
+        man.proneUntil = time + PRONE_SECONDS; man.fleeHeading = away + (rand() - 0.5) * 0.8;
+        s.state = 'bailed';
+        ctx.emit({ type: 'entity_spawned', entityId: man.id, kind: 'infantry', variant: 'crew', position: [x, man.y, z], fromVehicle: e.id });
+      });
+      void h;
+    },
+  };
 
   // ---- AI -------------------------------------------------------------
 
   function steer(e, dt, heading, speed) {
     const def = e.def;
     const err = wrap(heading - e.yaw);
-    e.yaw += Math.sign(err) * Math.min(Math.abs(err), def.turnRate * dt);
-    let want = speed;
+    e.yaw += Math.sign(err) * Math.min(Math.abs(err), def.turnRate * e.mult * dt);
+    let want = speed * e.mult;
     if (def.vehicle && Math.abs(err) > 0.6) want *= 0.25; // slow down to take a turn
     e.speed = approach(e.speed, want, def.accel * dt);
     e.x += -Math.sin(e.yaw) * e.speed * dt;
@@ -333,12 +460,26 @@ export function createEntities(ctx) {
     steer(e, dt, Math.atan2(-dx, -dz), def.walk);
   }
 
+  // How well a unit can move: vehicles by mobility kill, wounded infantry by their legs.
+  function moveFactor(e) {
+    if (e.def.vehicle) return e.v.abandoned ? 0 : e.v.mobility === 'immobilized' ? 0 : e.v.mobility === 'slow' ? 0.5 : 1;
+    return e.cond === 'wounded' ? 0.35 + 0.65 * infantryMobility(e) : 1;
+  }
+
+  // The turret needs a working gunner (or the commander), and a traverse drive that isn't jammed.
+  function turretWorks(e) {
+    const v = e.v;
+    if (v.abandoned) return false;
+    const g = v.crew.find((c) => c.role === 'gunner') ?? v.crew.find((c) => c.role === 'commander');
+    return !!g && aliveCrew(g) && !(v.comps.turret && v.comps.turret.state === 'destroyed');
+  }
+
   function react(e, dt, drone) {
     const def = e.def;
     const dx = e.x - drone.position[0], dz = e.z - drone.position[2];
     const away = Math.atan2(-dx, -dz);
     const dist = Math.hypot(dx, dz);
-    if (def.turret) { // track the drone with the turret
+    if (def.turret && turretWorks(e)) { // track the drone with the turret
       _qi.set(e.q[0], e.q[1], e.q[2], e.q[3]).invert();
       const l = _loc.set(drone.position[0] - e.x, 0, drone.position[2] - e.z).applyQuaternion(_qi);
       e.turretYaw = approach(e.turretYaw, Math.atan2(-l.x, -l.z), def.turret * dt);
@@ -361,17 +502,39 @@ export function createEntities(ctx) {
       return;
     }
     // Vehicles: trucks and APCs drive off when it gets close, tanks stand and turn the turret.
-    const bolt = e.kind === 'truck' || e.kind === 'light' || (e.kind === 'apc' && dist < 50);
+    const bolt = e.mult > 0 && (e.kind === 'truck' || e.kind === 'light' || (e.kind === 'apc' && dist < 50));
     if (bolt) { steer(e, dt, away, def.run); e.status = 'fleeing'; } else { steer(e, dt, e.yaw, 0); e.status = 'idle'; }
+  }
+
+  function updateInfantryDown(e, dt) {
+    // Can't stand: lie still (down) or drag themselves away (crawling), bleeding.
+    e.status = e.cond;
+    steer(e, dt, e.fleeHeading, e.cond === 'crawling' ? CRAWL_SPEED : 0);
+    if (e.cond === 'down') e.speed = 0;
   }
 
   function update(dt, drone) {
     time += dt;
     for (const e of list) {
       if (e.destroyed) {
-        if (e.onFire && time > e.fireUntil) e.onFire = false;
-        if (e.cookoffAt >= 0 && !e.cookoffDone && time >= e.cookoffAt) cookoff(e);
-        sync(e);
+        if (e.def.vehicle) sync(e); // wrecks keep their fire timer
+        continue;
+      }
+      cur = e;
+      if (e.def.vehicle) {
+        tickVehicle(e, env, hooks);
+        if (e.destroyed) continue;
+        e.health = vehicleHealth(e);
+      } else if (tickInfantry(e, env)) {
+        e.health = infantryHealth(e);
+        killInfantry(e, 'bleedout');
+        continue;
+      }
+      e.mult = moveFactor(e);
+      if (!e.def.vehicle && (e.cond === 'down' || e.cond === 'crawling')) {
+        updateInfantryDown(e, dt);
+        e.health = infantryHealth(e);
+        ground(e); sync(e);
         continue;
       }
       // Notice the drone: louder the faster it flies.
@@ -391,7 +554,7 @@ export function createEntities(ctx) {
         patrol(e, dt);
         e.mode = 'patrol';
         e.status = e.speed > (e.def.vehicle ? 0.3 : 0.2) ? 'moving' : 'idle';
-        if (e.def.turret) e.turretYaw = approach(e.turretYaw, 0, e.def.turret * 0.5 * dt);
+        if (e.def.turret && (!e.def.vehicle || turretWorks(e))) e.turretYaw = approach(e.turretYaw, 0, e.def.turret * 0.5 * dt);
       }
       ground(e);
       sync(e);
@@ -400,6 +563,8 @@ export function createEntities(ctx) {
 
   function reset() {
     time = 0;
+    nextCrewId = 0;
+    for (const e of [...list]) if (e.dynamic) remove(e);
     for (const e of list) place(e);
   }
 

@@ -139,7 +139,7 @@ export async function createSim({ level, settings = {} }) {
     applyBlast(x.position, [0, 1, 0], w, x.ignoreHandle);
   }
   const entities = createEntities({
-    world, level, emit: (e) => emit(e), damage, explode, registerCollider: (h, id) => entityColliders.set(h, id),
+    world, level, emit: (e) => emit(e), damage, explode, registerCollider: (h, id) => entityColliders.set(h, id), unregisterCollider: (h) => entityColliders.delete(h),
   });
   state.entities = entities.states;
 
@@ -274,13 +274,14 @@ export async function createSim({ level, settings = {} }) {
         blast, fragments, jet, distance, lineOfSight: los, shaped: !!w.shaped,
         penetrationMm: w.penetrationMm ?? 0, direction, position: origin,
       });
-      // A target returns either a damage number or { damage, source, weakSpot, after }.
+      // A target returns either a damage number or { damage, source, weakSpot, extra, after }.
       const res = typeof r === 'number' ? { damage: r } : (r ?? { damage: 0 });
       if (res.damage > 0) {
         emit({
           type: 'hit', entityId: t.id, position: tp, damage: res.damage,
           source: res.source ?? (blast > 0 || jet ? 'blast' : 'fragments'),
           ...(res.weakSpot ? { weakSpot: res.weakSpot } : {}),
+          ...res.extra,
         });
       }
       res.after?.();
