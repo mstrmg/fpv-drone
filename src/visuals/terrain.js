@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { mulberry32 } from './rng.js';
 import { canvasTexture } from './textures.js';
+import { lanes } from './propLayout.js';
 
 const FIELD_SPAN = 4096; // metres covered by the field maps
 
@@ -82,30 +83,10 @@ function buildLocalMap(level) {
     g.fillRect(X(x - r), X(z - r), r * 2 * k, r * 2 * k);
   };
 
-  const tracks = [];
+  // Lanes come from the shared prop layout, so the telegraph poles can follow them.
+  const tracks = (level.props ?? { lanes: lanes(level) }).lanes;
   const buildings = level.objects.filter((o) => o.kind === 'building');
   const trees = level.objects.filter((o) => o.kind === 'tree');
-  // Lanes follow the windbreaks, as they do between real fields.
-  tracks.push([[-half, -27], [half, -27]]);
-  tracks.push([[-108, -27], [-108, 330]]);
-  tracks.push([[272, -27], [272, 420]]);
-  tracks.push([[-440, -305], [440, -287]]);
-  if (buildings.length > 6) {
-    // Village streets between the rows of houses, joined to the lane network.
-    let cx = 0, cz = 0, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, n = 0;
-    for (const b of buildings) {
-      if (b.size[1] > 9) continue;
-      cx += b.position[0]; cz += b.position[2]; n++;
-      x0 = Math.min(x0, b.position[0]); x1 = Math.max(x1, b.position[0]);
-      z0 = Math.min(z0, b.position[2]); z1 = Math.max(z1, b.position[2]);
-    }
-    if (n) {
-      for (const z of [-235, -205]) tracks.push([[x0 - 22, z], [x1 + 14, z]]);
-      tracks.push([[x0 - 22, z0 - 14], [x0 - 22, -27]]);
-      tracks.push([[x0 - 22, -265], [x1 + 14, -265]]);
-      tracks.push([[x0 - 22, -175], [x1 + 14, -175]]);
-    }
-  }
 
   g.filter = 'blur(1.2px)';
   g.lineCap = 'round';
@@ -129,7 +110,25 @@ function buildLocalMap(level) {
   // Trampled launch spot.
   blob(level.spawn.position[0], level.spawn.position[2], 7, '0,255,0', 0.95);
   const tex = canvasTexture(c, { srgb: false, aniso: 4, flipY: false });
-  return { localMap: tex, tracks };
+  // Blast mark: churned bare earth in the middle, soot and thrown soil around it.
+  const scorch = (x, z, radius) => {
+    if (Math.abs(x) > half || Math.abs(z) > half) return;
+    blob(x, z, radius * 0.5, '0,255,0', 1);
+    blob(x, z, radius * 0.5, '0,255,0', 1);
+    blob(x, z, radius * 0.95, '255,0,0', 1);
+    blob(x, z, radius * 0.6, '255,0,0', 1);
+    g.fillStyle = 'rgba(255,60,0,0.55)';
+    for (let i = 0; i < 16; i++) {
+      const a = Math.random() * Math.PI * 2, len = radius * (0.9 + Math.random() * 1.1), w = 0.06 + Math.random() * 0.1;
+      g.beginPath();
+      g.moveTo(X(x + Math.cos(a - w) * radius * 0.3), X(z + Math.sin(a - w) * radius * 0.3));
+      g.lineTo(X(x + Math.cos(a) * len), X(z + Math.sin(a) * len));
+      g.lineTo(X(x + Math.cos(a + w) * radius * 0.3), X(z + Math.sin(a + w) * radius * 0.3));
+      g.fill();
+    }
+    tex.needsUpdate = true;
+  };
+  return { localMap: tex, tracks, scorch };
 }
 
 function buildHeightTexture(terrain) {
@@ -213,7 +212,8 @@ const fragAlbedo = /* glsl */ `
   float litter = smoothstep(0.2, 0.8, loc.b + (d1.a - 0.5) * 0.7);
   alb = mix(alb, vec3(0.17, 0.10, 0.045) * (0.7 + 0.6 * d1.b), litter * 0.62);
 
-  alb *= 1.0 - loc.r * 0.62;
+  alb *= 1.0 - min(loc.r, 1.0) * 0.62;
+  alb *= 1.0 - smoothstep(0.75, 1.0, loc.r) * loc.g * 0.5; // soot where a blast has burnt bare earth
   diffuseColor.rgb = alb;
   float groundRough = mix(0.97, 0.3, wet);
 `;
@@ -228,7 +228,7 @@ const fragNormal = /* glsl */ `
 export function createTerrain({ scene, level, detailTex }) {
   const { terrain } = level;
   const fields = buildFieldMaps(level);
-  const { localMap, tracks } = buildLocalMap(level);
+  const { localMap, tracks, scorch } = buildLocalMap(level);
   const heightTex = buildHeightTexture(terrain);
 
   const geo = new THREE.PlaneGeometry(terrain.size, terrain.size, terrain.segments, terrain.segments);
@@ -267,6 +267,7 @@ export function createTerrain({ scene, level, detailTex }) {
   return {
     maps: { fieldColor: fields.fieldColor, fieldData: fields.fieldData, localMap, heightTex },
     tracks,
+    scorch,
     dispose() {
       geo.dispose(); skirtGeo.dispose(); mat.dispose();
       fields.fieldColor.dispose(); fields.fieldData.dispose(); localMap.dispose(); heightTex.dispose();

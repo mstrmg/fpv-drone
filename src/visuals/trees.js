@@ -291,12 +291,12 @@ export function createTrees({ scene, level }) {
   }
 
   let lodClock = 1;
-  function refreshLod(cam) {
+  function refreshLod(cam, zoom) {
     for (const tpl of templates) {
       if (!tpl.list.length) continue;
       let changed = tpl.dirty;
       for (const t of tpl.list) {
-        const d = Math.hypot(t.x - cam.x, t.z - cam.z, cam.y * 0.5);
+        const d = Math.hypot(t.x - cam.x, t.z - cam.z, cam.y * 0.5) * zoom;
         const near = t.near ? d < NEAR_DIST + LOD_HYSTERESIS : d < NEAR_DIST;
         if (near !== t.near) { t.near = near; changed = true; }
       }
@@ -319,10 +319,10 @@ export function createTrees({ scene, level }) {
   }
 
   return {
-    update(time, camPos, dt = 0.016) {
+    update(time, camPos, dt = 0.016, zoom = 1) {
       timeU.value = time;
       lodClock += dt;
-      if (lodClock > 0.2) { lodClock = 0; refreshLod(camPos); }
+      if (lodClock > 0.2) { lodClock = 0; refreshLod(camPos, zoom); }
     },
     dispose() { meshes.forEach((m) => { scene.remove(m); m.dispose(); }); disposables.forEach((d) => d.dispose()); },
   };
