@@ -18,6 +18,11 @@ const input = createInput(window);
 const useDebug = new URLSearchParams(location.search).has('debug');
 const visuals = (useDebug ? createDebugVisuals : createRealVisuals)({ canvas, uiRoot, level });
 
+// On foot, a click captures the mouse for looking around (Esc releases it).
+canvas.addEventListener('click', () => {
+  if (sim.state.mode === 'foot' && !document.pointerLockElement) canvas.requestPointerLock?.();
+});
+
 function resize() { visuals.resize(window.innerWidth, window.innerHeight); }
 window.addEventListener('resize', resize);
 resize();
@@ -29,6 +34,7 @@ let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
+  input.setMode(sim.state.mode);
   const controls = input.poll(dt);
   acc += dt;
   while (acc >= STEP) {

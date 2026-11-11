@@ -404,6 +404,42 @@ export function createEntities({ scene, level, smoke, fire }) {
     });
   }
 
+  // A panicked soldier fires a few rounds up at the drone: flash at the muzzle, one tracer.
+  function shotAt(ev, v) {
+    const from = tmpV.fromArray(ev.from);
+    const s = v?.s;
+    if (s?.weapon?.visible && s.info?.muzzle) s.weapon.localToWorld(from.fromArray(s.info.muzzle));
+    const to = tmpV2.fromArray(ev.to);
+    const dir = tmpV3.copy(to).sub(from);
+    const dist = dir.length();
+    if (dist < 0.5) return;
+    dir.divideScalar(dist);
+    fire.spawn({ pos: [from.x + dir.x * 0.15, from.y + dir.y * 0.15, from.z + dir.z * 0.15], vel: [0, 0, 0], size: 0.45, grow: 0.5, life: 0.06, color: [3, 2.4, 1.4], alpha: 1, fadeIn: 100, drag: 0 });
+    // Tracer: a fast bright point along the line, a little off when it misses.
+    const sp = 320, miss = ev.hit ? 0 : 0.03;
+    const vx = (dir.x + (Math.random() - 0.5) * miss) * sp, vy = (dir.y + (Math.random() - 0.5) * miss) * sp, vz = (dir.z + (Math.random() - 0.5) * miss) * sp;
+    if (Math.random() < 0.6) fire.spawn({ pos: [from.x + dir.x, from.y + dir.y, from.z + dir.z], vel: [vx, vy, vz], size: 0.12, grow: 0, life: Math.min(1.2, (dist + 60) / sp), drag: 0, color: [3, 1.6, 0.6], alpha: 1, fadeIn: 100 });
+  }
+
+  // He throws his helmet or rifle at the drone: a copy flies on the sim's arc, his own one goes.
+  function throwAt(ev, v) {
+    const s = v?.s;
+    if (!s) return;
+    const src = ev.item === 'helmet' ? s.headgear : s.weapon;
+    if (!src || !src.visible) return;
+    src.updateWorldMatrix(true, true);
+    const obj = src.clone();
+    src.getWorldPosition(obj.position); src.getWorldQuaternion(obj.quaternion); src.getWorldScale(obj.scale);
+    if (ev.position) obj.position.fromArray(ev.position);
+    scene.add(obj);
+    src.visible = false;
+    debris.push({
+      obj, vel: new THREE.Vector3().fromArray(ev.velocity), rest: false, own: false,
+      spin: new THREE.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 14),
+      lift: ev.item === 'helmet' ? 0.08 : 0.04,
+    });
+  }
+
   function chunk(at, size, mat, from, speed, lift) {
     const m = new THREE.Mesh(chunkGeo, mat);
     m.scale.copy(size);
@@ -710,12 +746,15 @@ export function createEntities({ scene, level, smoke, fire }) {
     }
     // Dust kicked up behind when driving fast.
     if (Math.abs(vf) > 2.5) {
+      // A plume that grows with speed: a quad bike flat out drags a long tail of it.
+      const fast = Math.min(1, (Math.abs(vf) - 2.5) / 12);
       v.dustAcc += dt * Math.abs(vf) * 0.8;
       while (v.dustAcc > 1) {
         v.dustAcc -= 1;
         const sx = Math.random() < 0.5 ? -1 : 1;
         const p = v.root.localToWorld(tmpV.set(sx * t.size[0] * 0.42, 0.25, t.size[2] * 0.45 * Math.sign(vf)));
-        smoke.spawn({ pos: [p.x, p.y, p.z], vel: [rnd(-0.5, 0.5), rnd(0.4, 1), rnd(-0.5, 0.5)], size: 0.8, grow: 3, life: 2.5, drag: 1.2, wind: 1, color: [0.31, 0.27, 0.21], alpha: 0.22 });
+        smoke.spawn({ pos: [p.x, p.y, p.z], vel: [rnd(-0.5, 0.5), rnd(0.4, 1) + fast * 0.6, rnd(-0.5, 0.5)], size: 0.8 + fast * 0.7, grow: 3 + fast * 2,
+          life: 2.5 + fast * 2, drag: 1.2, wind: 1, color: [0.33, 0.29, 0.23], alpha: 0.22 + fast * 0.13 });
       }
     }
     // Damage smoke from the engine bay, thicker as damage grows; small flames when it is bad.
@@ -762,7 +801,7 @@ export function createEntities({ scene, level, smoke, fire }) {
     let f = v.crewFigs.find((x) => x.spot === spot);
     if (f) return f;
     const parent = spot.on === 'turret' && v.turret ? v.turret : v.inner;
-    const s = soldiers.make('crew', hashString(v.id + spot.role) + 5);
+    const s = soldiers.make(spot.variant ?? 'crew', hashString(v.id + spot.role) + 5);
     initSoldierAnim(s);
     s.root.position.fromArray(spot.pos);
     s.root.scale.setScalar(s.scale);
@@ -790,7 +829,8 @@ export function createEntities({ scene, level, smoke, fire }) {
       f.s.root.position.set(spot.pos[0], spot.pos[1] - (1 - f.k) * 0.95 + (f.mode === 'slumped' ? 0.06 : 0), spot.pos[2]);
       if (f.s.root.visible && dt > 0) {
         const al = alerted.has(e.id) && clock - alerted.get(e.id) < 60;
-        animateCrew(f.s, { dt, mode: f.mode === 'driver' ? 'hatch' : f.mode, alert: al, seated: spot.mode === 'driver' });
+        // A quad bike's rider sits astride it with his hands on the bars.
+        animateCrew(f.s, { dt, mode: f.mode === 'driver' ? 'hatch' : f.mode === 'rider' ? 'gunner' : f.mode, alert: al, seated: spot.mode === 'driver' || spot.mode === 'rider' });
       }
     }
     for (const h of v.hatches) {
@@ -1050,9 +1090,20 @@ export function createEntities({ scene, level, smoke, fire }) {
       }
       return;
     }
+    const al = alerted.has(e.id) && clock - alerted.get(e.id) < 60 ? 1 : 0;
+    if (e.riding) {
+      // Sitting on a vehicle (legs over the side): the sim gives the point he sits on.
+      s.root.quaternion.fromArray(e.quaternion);
+      s.root.position.fromArray(e.position);
+      s.root.position.addScaledVector(tmpV.set(0, 1, 0).applyQuaternion(s.root.quaternion), -0.86 * sc);
+      if (dt > 0) animateCrew(s, { dt, mode: 'gunner', alert: al, seated: true });
+      v.shadow.visible = false;
+      v.wasRiding = true;
+      return;
+    }
+    if (v.wasRiding) { v.wasRiding = false; v.shadow.visible = true; if (s.wpivot) s.wpivot.visible = true; }
     s.root.position.fromArray(e.position);
     s.root.quaternion.fromArray(e.quaternion);
-    const al = alerted.has(e.id) && clock - alerted.get(e.id) < 60 ? 1 : 0;
     if (dt > 0) animateSoldier(s, { dt, speed, status: e.status, drone, alert: al, wounds: e.wounds });
     // A bleeding man leaves a trail of drops.
     if (e.bleeding && dt > 0) {
@@ -1113,6 +1164,10 @@ export function createEntities({ scene, level, smoke, fire }) {
             }
           }
         }
+      } else if (ev.type === 'entity_shot') {
+        shotAt(ev, live.get(ev.entityId));
+      } else if (ev.type === 'entity_throw') {
+        throwAt(ev, live.get(ev.entityId));
       } else if (ev.type === 'entity_destroyed') {
         const v = live.get(ev.entityId);
         if (v && !v.dead && v.kind !== 'infantry') killVehicle(v, byId.get(ev.entityId), true);
@@ -1151,11 +1206,13 @@ export function createEntities({ scene, level, smoke, fire }) {
 
       if (v.kind === 'infantry') {
         if (e.status === 'destroyed' && !v.dead) killSoldier(v, e);
+        v.root.visible = !(e.riding && byId.get(e.riding)?.status === 'escaped'); // got away with their vehicle
         updateSoldier(v, e, dt, speed, drone);
         continue;
       }
 
       if (e.status === 'destroyed' && !v.dead) killVehicle(v, e, true);
+      v.root.visible = e.status !== 'escaped'; // got away down the road, off the map
       // Burning without having blown up: the fire takes hold quietly.
       if (e.fire === 'full' && !v.dead) killVehicle(v, e, true, true);
       v.sink += (v.sinkTarget - v.sink) * Math.min(1, dt * 0.4);

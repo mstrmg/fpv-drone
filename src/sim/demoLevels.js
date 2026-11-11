@@ -2,15 +2,16 @@
 // Same Level shape as createTestLevel (see ARCHITECTURE.md › Level), with hand-placed props.
 
 import { createTerrain, createTestLevel, mulberry32 } from './level.js';
+import { createCampaignLevel } from './campaignLevel.js';
 
 const SIZE = 320; // metres; the map edge is the off-map boundary (half = 160 m)
 
-function builder(name, seed, terrainOpts) {
+export function builder(name, seed, terrainOpts) {
   const terrain = createTerrain({ size: SIZE, segments: 160, seed, ...terrainOpts });
   const rand = mulberry32(seed * 131 + 9);
   const H = (x, z) => terrain.heightAt(x, z);
   const objects = [], enemies = [];
-  const props = { lanes: [], craters: [], poles: [], wires: [], fences: [], bales: [], sandbags: [] };
+  const props = { lanes: [], craters: [], poles: [], wires: [], fences: [], bales: [], sandbags: [], trenches: [], dugouts: [], masts: [], camoNets: [], mortars: [], friendlies: [] };
   let id = 0;
   const b = {
     terrain, rand, H, objects, enemies, props,
@@ -168,6 +169,7 @@ export function createFarmsteadLevel() {
 }
 
 export const LEVELS = [
+  { id: 'campaign', name: 'Campaign', blurb: 'Huge: 3 km of front line. Start on foot in your dugout', create: createCampaignLevel },
   { id: 'range', name: 'Test range', blurb: '1 km of farmland, a village and a dozen targets', create: () => createTestLevel() },
   { id: 'treeline', name: 'Treeline', blurb: 'Tiny: one windbreak, a dug-in squad and a BMP', create: createTreelineLevel },
   { id: 'farmstead', name: 'Farmstead', blurb: 'Tiny: a crossroads farm with a T-72 by the barn', create: createFarmsteadLevel },

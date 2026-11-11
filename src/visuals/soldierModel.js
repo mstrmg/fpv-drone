@@ -443,6 +443,7 @@ export function createSoldierFactory() {
     strap: std({ color: 0x2c2d25, roughness: 0.95, side: THREE.DoubleSide }),
     tapeWhite: std({ color: 0xd8d8d0, roughness: 0.7, side: THREE.DoubleSide }),
     tapeRed: std({ color: 0x9a1c18, roughness: 0.7, side: THREE.DoubleSide }),
+    tapeYellow: std({ color: 0xd6b52a, roughness: 0.7, side: THREE.DoubleSide }),
     mat: std({ color: 0x4f5a45, roughness: 0.9 }),
     tanker: std({ color: 0x1d1e1b, roughness: 0.85, side: THREE.DoubleSide }),
     tankerCanvas: std({ color: 0x4a4a39, roughness: 0.95, side: THREE.DoubleSide }),
@@ -638,7 +639,8 @@ export function createSoldierFactory() {
   }
 
   // One soldier. `variant` is the sim's role; everything else comes from the seed.
-  function make(variant, seed) {
+  // opts.friendly: one of ours (yellow tape on the arms and legs).
+  function make(variant, seed, opts = {}) {
     const rand = mulberry32(seed);
     const root = new THREE.Group();
     const { map: bones, list } = makeBones();
@@ -663,7 +665,8 @@ export function createSoldierFactory() {
       : headKind === 'boonie' || headKind === 'cap' ? camoGearMats[camo] : rand() < 0.65 ? camoGearMats[camo] : shared.helmetPaint;
     const balaclava = !officer && !crew && rand() < 0.35;
     const gloves = rand() < 0.7;
-    const tape = rand() < 0.75 ? (rand() < 0.65 ? shared.tapeWhite : shared.tapeRed) : null;
+    const tape0 = rand() < 0.75 ? (rand() < 0.65 ? shared.tapeWhite : shared.tapeRed) : null;
+    const tape = opts.friendly ? shared.tapeYellow : tape0;
     const mats = {
       gear: gearMat, strap: shared.strap, helmet: helmetMat, knit: helmetMat, dark: shared.dark, glass: shared.glass,
       boot: rand() < 0.7 ? shared.boot : shared.bootTan, sole: shared.sole, cloth: coverall ?? camoMats[camo], mat: shared.mat, tape,
@@ -680,7 +683,7 @@ export function createSoldierFactory() {
       bones[b.bone].add(g);
       return g;
     };
-    attach(headgear[headKind]);
+    const hat = attach(headgear[headKind]);
     if (!crew) attach(rand() < 0.75 || officer ? chestKits.carrier : chestKits.vestOld);
     else if (rand() < 0.3) attach(chestKits.vestOld);
     if (!officer && !crew && rand() < 0.45) attach(chestKits.pack);
@@ -727,7 +730,7 @@ export function createSoldierFactory() {
     const scale = (0.95 + rand() * 0.09);
     return {
       root, bones, body, weapon, wpivot, gun, info: weapons[gun], binos, binosInfo: weapons.binos, officer, crew, variant, scale,
-      seed, rand,
+      seed, rand, headgear: hat,
     };
   }
 

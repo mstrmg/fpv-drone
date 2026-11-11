@@ -4,8 +4,10 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { Quaternion, Vector3 } from 'three';
 import { FlightModel } from './flightModel.js';
 import { Wind } from './environment.js';
-import { createEntities } from './entities.js';
+import { createEntities, jamming } from './entities.js';
 import { addPropColliders, WireField } from './propColliders.js';
+import { createWalker } from './onFoot.js';
+import { createMissions } from './missions.js';
 import { WARHEADS, ARM_DISTANCE_M, FUZE_IMPACT_SPEED, JET_REACH_M, blastAt, DamageRegistry } from './warhead.js';
 
 export const SIM_HZ = 240;
@@ -36,11 +38,23 @@ function buildStaticWorld(world, level) {
       verts[i * 3 + 2] = -terrain.size / 2 + iz * step;
     }
   }
+  // Holes cut in the ground (a dugout's entrance ramp): whole grid cells are left out of the
+  // trimesh and the parts of them outside the hole are capped with thin flat boxes.
+  const holes = level.terrainHoles ?? [];
+  const cut = [];
+  const overlaps = (r, h) => r[0] < h[2] && r[2] > h[0] && r[1] < h[3] && r[3] > h[1];
   const idx = new Uint32Array(terrain.segments * terrain.segments * 6);
   let k = 0;
   for (let iz = 0; iz < terrain.segments; iz++) {
     for (let ix = 0; ix < terrain.segments; ix++) {
       const a = iz * n + ix, b = a + 1, c = a + n, d = c + 1;
+      if (holes.length) {
+        const cell = [-terrain.size / 2 + ix * step, -terrain.size / 2 + iz * step, -terrain.size / 2 + (ix + 1) * step, -terrain.size / 2 + (iz + 1) * step];
+        if (holes.some((h) => overlaps(cell, h))) {
+          cut.push({ cell, y: (terrain.heights[a] + terrain.heights[b] + terrain.heights[c] + terrain.heights[d]) / 4 });
+          continue;
+        }
+      }
       // Triangles (a,d,b) and (a,c,d): diagonal a→d, normals +Y. Matches heightAt().
       idx[k++] = a; idx[k++] = d; idx[k++] = b;
       idx[k++] = a; idx[k++] = c; idx[k++] = d;
@@ -48,8 +62,27 @@ function buildStaticWorld(world, level) {
   }
   const surfaces = new Map(); // collider handle → { surface, objectId }
   const ground = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-  const gc = world.createCollider(RAPIER.ColliderDesc.trimesh(verts, idx).setFriction(0.8), ground);
+  const gc = world.createCollider(RAPIER.ColliderDesc.trimesh(verts, idx.subarray(0, k)).setFriction(0.8), ground);
   surfaces.set(gc.handle, { surface: 'ground', objectId: null });
+  for (const { cell, y } of cut) {
+    let pieces = [cell];
+    for (const h of holes) {
+      pieces = pieces.flatMap((r) => {
+        if (!overlaps(r, h)) return [r];
+        const out = [];
+        if (h[0] > r[0]) out.push([r[0], r[1], h[0], r[3]]);
+        if (h[2] < r[2]) out.push([h[2], r[1], r[2], r[3]]);
+        const x0 = Math.max(r[0], h[0]), x1 = Math.min(r[2], h[2]);
+        if (h[1] > r[1]) out.push([x0, r[1], x1, h[1]]);
+        if (h[3] < r[3]) out.push([x0, h[3], x1, r[3]]);
+        return out;
+      });
+    }
+    for (const [x0, z0, x1, z1] of pieces) {
+      const c = world.createCollider(RAPIER.ColliderDesc.cuboid((x1 - x0) / 2, 0.1, (z1 - z0) / 2).setTranslation((x0 + x1) / 2, y - 0.1, (z0 + z1) / 2).setFriction(0.8), ground);
+      surfaces.set(c.handle, { surface: 'ground', objectId: null });
+    }
+  }
 
   for (const o of level.objects) {
     const [x, y, z] = o.position;
@@ -110,9 +143,14 @@ export async function createSim({ level, settings = {} }) {
   );
 
   const events = [];
+  // Levels with a `start` begin on foot (campaign); the others go straight to the drone.
+  const walker = level.start ? createWalker(world, level) : null;
   const state = {
     time: 0,
     paused: false,
+    mode: walker ? 'foot' : 'drone',
+    player: walker ? walker.state : null,
+    prompt: null,
     drone: {
       position: [0, 0, 0], quaternion: [0, 0, 0, 1], velocity: [0, 0, 0], angularVelocity: [0, 0, 0],
       motors: [0, 0, 0, 0], throttle: 0, armed: false, crashed: false, destroyed: false, flightMode: 'ACRO',
@@ -139,9 +177,11 @@ export async function createSim({ level, settings = {} }) {
     applyBlast(x.position, [0, 1, 0], w, x.ignoreHandle);
   }
   const entities = createEntities({
-    world, level, emit: (e) => emit(e), damage, explode, registerCollider: (h, id) => entityColliders.set(h, id), unregisterCollider: (h) => entityColliders.delete(h),
+    world, level, emit: (e) => emit(e), damage, explode, droneHit: (cause) => hitDrone(cause), registerCollider: (h, id) => entityColliders.set(h, id), unregisterCollider: (h) => entityColliders.delete(h),
   });
   state.entities = entities.states;
+  const missions = walker ? createMissions({ level, entities, state, emit: (e) => emit(e) }) : null;
+  if (!missions) state.mission = null;
 
   let flightTime = 0;
   let throttleWarnUntil = -1;
@@ -149,6 +189,8 @@ export async function createSim({ level, settings = {} }) {
   let safeWarnUntil = -1;
   let respawnAt = -1;
   const launchPoint = new Vector3();
+  const linkOrigin = new Vector3();
+  const NEUTRAL = { throttle: 0, yaw: 0, pitch: 0, roll: 0 };
   const emit = (e) => events.push({ time: state.time, ...e });
 
   function respawn() {
@@ -165,6 +207,7 @@ export async function createSim({ level, settings = {} }) {
     fm.resetBattery();
     state.drone.crashed = false;
     state.drone.destroyed = false;
+    droneHits = 0;
     state.drone.warhead.state = 'safe';
     state.link.lost = false;
     state.link.signal = 1;
@@ -172,9 +215,22 @@ export async function createSim({ level, settings = {} }) {
     signalLost = false;
     respawnAt = -1;
     launchPoint.set(position[0], position[1], position[2]);
+    if (level.linkOrigin) linkOrigin.fromArray(level.linkOrigin); else linkOrigin.copy(launchPoint);
     flightTime = 0;
     upsideDownTime = 0;
     writeState();
+  }
+
+  // Small-arms fire: a round through the frame glitches the feed; a second one takes out a motor.
+  let droneHits = 0;
+  function hitDrone(cause) {
+    const d = state.drone;
+    if (d.destroyed || d.crashed || state.mode === 'foot') return;
+    droneHits++;
+    const p = body.translation();
+    emit({ type: 'drone_hit', cause, position: [p.x, p.y, p.z], hits: droneHits });
+    if (droneHits >= 2) crash([p.x, p.y, p.z], 0, cause === 'bullet' ? 'shot' : cause);
+    else body.applyTorqueImpulse({ x: (Math.random() - 0.5) * 0.004, y: 0, z: (Math.random() - 0.5) * 0.004 }, true);
   }
 
   function setArmed(on) {
@@ -291,7 +347,7 @@ export async function createSim({ level, settings = {} }) {
   // Analog video link: weakens with distance from the launch point, flying low
   // (the ground blocks the signal) and hills between you and the launch point.
   // `roll` drives the picture rolling vertically as sync starts to fail.
-  const LINK_RANGE_M = 800;
+  const LINK_RANGE_M = level.linkRangeM ?? 800;
   let linkTick = 0;
   let occlusion = 1;
   let signalLost = false;
@@ -300,27 +356,83 @@ export async function createSim({ level, settings = {} }) {
     if (state.drone.destroyed) return;
     const p = body.translation();
     const T = level.terrain;
-    const dist = launchPoint.distanceTo(_to.set(p.x, p.y, p.z));
+    const dist = linkOrigin.distanceTo(_to.set(p.x, p.y, p.z));
     const agl = Math.max(0, p.y - T.heightAt(p.x, p.z));
     if ((linkTick++ & 7) === 0) { // terrain between us and the launch point, sampled a few times a second
       let blocked = 0;
       const N = 12;
       for (let i = 1; i < N; i++) {
         const t = i / N;
-        const x = launchPoint.x + (p.x - launchPoint.x) * t, z = launchPoint.z + (p.z - launchPoint.z) * t;
-        const y = launchPoint.y + 1 + (p.y - launchPoint.y - 1) * t;
+        const x = linkOrigin.x + (p.x - linkOrigin.x) * t, z = linkOrigin.z + (p.z - linkOrigin.z) * t;
+        const y = linkOrigin.y + 1 + (p.y - linkOrigin.y - 1) * t;
         blocked = Math.max(blocked, T.heightAt(x, z) - y);
       }
       occlusion = blocked > 0 ? Math.max(0.25, 1 - blocked / 15) : 1;
     }
+    if ((linkTick & 7) === 1) jam = jamAt(p);
+    l.jamming += (jam - l.jamming) * Math.min(1, dt / 0.3);
     const range = Math.max(0, 1 - (dist / LINK_RANGE_M) ** 2);
     const lowFly = Math.max(0, Math.min(1, (4 - agl) / 4)) * (0.25 + 0.75 * Math.min(1, dist / 120));
-    const target = range * (1 - 0.75 * lowFly) * occlusion;
+    const target = range * (1 - 0.75 * lowFly) * occlusion * (1 - 0.97 * l.jamming);
     l.signal += (target - l.signal) * Math.min(1, dt / 0.25);
     l.roll = Math.min(1, Math.max(0, (0.6 - l.signal) / 0.4)) ** 1.5;
     const lost = l.signal < 0.08;
     if (lost !== signalLost) { signalLost = lost; emit({ type: lost ? 'link_lost' : 'link_restored' }); }
     l.lost = lost;
+  }
+
+  // Jammers (an EW truck, `jammer: { range, power }` on its enemy def): drowns the link as you get
+  // closer, all of it inside ~100 m. Only in line of sight: a hill, a house or trees between the
+  // drone and its antennas soak most of it up, so you come in low behind cover.
+  let jam = 0;
+  const coverCache = new Map();
+  function cover(e) {
+    let c = coverCache.get(e.id);
+    if (!c) {
+      const R = e.jam.range ?? 500;
+      const near = (o) => Math.hypot(o.position[0] - e.x, o.position[2] - e.z) < R + 20;
+      c = { trees: level.objects.filter((o) => o.kind === 'tree' && near(o)), houses: level.objects.filter((o) => o.kind === 'building' && near(o)) };
+      coverCache.set(e.id, c);
+    }
+    return c;
+  }
+  function jamAt(p) {
+    let worst = 0;
+    const T = level.terrain;
+    for (const e of entities.list) {
+      if (!e.jam || !jamming(e)) continue;
+      const R = e.jam.range ?? 500, full = e.jam.full ?? 100;
+      const ax = e.x, ay = e.y + 6, az = e.z;  // top of the antenna mast
+      const d = Math.hypot(p.x - ax, p.y - ay, p.z - az);
+      if (d > R) continue;
+      let k = Math.min(1, ((R - d) / (R - full)) ** 1.3) * (e.jam.power ?? 1);
+      // Hills in between.
+      let blocked = 0;
+      for (let i = 1; i < 10; i++) {
+        const t = i / 10, x = ax + (p.x - ax) * t, z = az + (p.z - az) * t, y = ay + (p.y - ay) * t;
+        blocked = Math.max(blocked, T.heightAt(x, z) - y);
+      }
+      if (blocked > 0) k *= Math.max(0.05, 1 - blocked / 4);
+      // Houses and trees in between.
+      const dx = p.x - ax, dz = p.z - az, L2 = dx * dx + dz * dz || 1;
+      const { trees, houses } = cover(e);
+      for (const o of houses) {
+        const [ox, oy, oz] = o.position, [w, h, dd] = o.size;
+        const t = Math.max(0, Math.min(1, ((ox - ax) * dx + (oz - az) * dz) / L2));
+        if (t < 0.02 || t > 0.98) continue;
+        const sx = ax + dx * t, sz = az + dz * t, sy = ay + (p.y - ay) * t;
+        if (Math.hypot(sx - ox, sz - oz) < Math.min(w, dd) * 0.5 && sy < oy + h + 1) k *= 0.15;
+      }
+      for (const o of trees) {
+        const [ox, oy, oz] = o.position;
+        const t = Math.max(0, Math.min(1, ((ox - ax) * dx + (oz - az) * dz) / L2));
+        if (t < 0.02 || t > 0.98) continue;
+        const sx = ax + dx * t, sz = az + dz * t, sy = ay + (p.y - ay) * t;
+        if (Math.hypot(sx - ox, sz - oz) < o.radius * 0.9 && sy < oy + o.height) k *= 0.6;
+      }
+      worst = Math.max(worst, k);
+    }
+    return worst;
   }
 
   function updateWarheadArming() {
@@ -332,13 +444,30 @@ export async function createSim({ level, settings = {} }) {
     if (fm.armed && flown >= ARM_DISTANCE_M) wh.state = 'armed';
   }
 
+  function setMode(mode) {
+    if (state.mode === mode) return;
+    state.mode = mode;
+    if (mode === 'drone' && (state.drone.crashed || state.drone.destroyed)) { respawn(); emit({ type: 'reset' }); }
+    if (mode === 'foot') setArmed(false);
+    emit({ type: 'mode', mode });
+  }
+
   function handleEdges(c) {
     if (c.pause) state.paused = !state.paused;
+    if (state.paused) return;
+    if (c.skipMission) missions?.next();
+    if (state.mode === 'foot') {
+      if ((c.interact || c.goggles) && missions?.skip()) return; // skip the briefing
+      if ((c.interact || c.goggles) && walker.state.nearGoggles && !state.mission?.cutscene) setMode('drone');
+      if (c.resetTargets) { entities.reset(); emit({ type: 'targets_reset' }); missions?.reset(); }
+      return;
+    }
+    if (walker && c.goggles) { setMode('foot'); return; }
     if (c.fire && !state.paused) {
       if (state.drone.warhead.state === 'armed') detonate('manual');
       else if (!state.drone.destroyed && warhead.type !== 'none') safeWarnUntil = state.time + 2;
     }
-    if (c.resetTargets) { entities.reset(); emit({ type: 'targets_reset' }); }
+    if (c.resetTargets) { entities.reset(); emit({ type: 'targets_reset' }); missions?.reset(); }
     if (c.toggleMode) fm.mode = fm.mode === 'ACRO' ? 'ANGLE' : 'ACRO';
     if (c.reset) { respawn(); emit({ type: 'reset' }); }
     if (c.arm) {
@@ -354,9 +483,17 @@ export async function createSim({ level, settings = {} }) {
   const accel = new Vector3();
   const gq = new Quaternion();
 
-  function step(dt, controls) {
-    handleEdges(controls);
+  function step(dt, input) {
+    handleEdges(input);
     if (state.paused) return;
+    // On foot the drone sits where it is with the sticks centred.
+    const controls = state.mode === 'foot' ? NEUTRAL : input;
+    if (walker) {
+      missions?.update(dt);
+      // While the spotter feed is up you're watching the tablet, not walking.
+      if (state.mode === 'foot') walker.update(dt, state.mission?.cutscene ? NEUTRAL : input, (col) => col.handle === droneCollider.handle);
+      state.prompt = state.mode === 'foot' && walker.state.nearGoggles ? 'goggles' : state.mode === 'drone' ? 'ungoggle' : null;
+    }
 
     const dr = state.drone;
     entityDrone.position = dr.position;
@@ -366,7 +503,11 @@ export async function createSim({ level, settings = {} }) {
 
     if (state.drone.destroyed) {
       state.time += dt;
-      if (respawnAt >= 0 && state.time >= respawnAt) { respawn(); emit({ type: 'reset' }); }
+      if (respawnAt >= 0 && state.time >= respawnAt) {
+        respawn(); emit({ type: 'reset' });
+        if (walker) setMode('foot'); // goggles off: the next drone is waiting by the mast
+      }
+      if (walker) world.step(); // the walker still moves
       writeState(controls);
       return;
     }
@@ -457,8 +598,10 @@ export async function createSim({ level, settings = {} }) {
     d.armed = fm.armed;
     d.flightMode = fm.mode;
 
-    // FPV camera: front of the frame, tilted up.
+    // FPV camera: front of the frame, tilted up. On foot: the soldier's eyes.
     _q.set(r.x, r.y, r.z, r.w);
+    if (state.mode === 'foot') walker.writeCamera(state.camera, 72);
+    else {
     _camOffset.set(0, 0.03, -0.09).applyQuaternion(_q);
     const cam = state.camera;
     cam.position[0] = p.x + _camOffset.x; cam.position[1] = p.y + _camOffset.y; cam.position[2] = p.z + _camOffset.z;
@@ -467,6 +610,7 @@ export async function createSim({ level, settings = {} }) {
     cam.quaternion[0] = _q.x; cam.quaternion[1] = _q.y; cam.quaternion[2] = _q.z; cam.quaternion[3] = _q.w;
     cam.fovDeg = opts.fovDeg;
     cam.tiltDeg = opts.cameraTiltDeg;
+    }
 
     const h = state.hud;
     h.armed = fm.armed;
@@ -495,6 +639,7 @@ export async function createSim({ level, settings = {} }) {
     if (state.time < safeWarnUntil) w.push('WARHEAD SAFE');
     if (state.time < throttleWarnUntil) w.push('THROTTLE');
     if (fm.voltage / fm.batt.cells < 3.3 && fm.armed) w.push('LOW BATTERY');
+    if (!d.destroyed && state.link.jamming > 0.25) w.push('JAMMING');
   }
 
   respawn();

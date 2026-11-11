@@ -82,8 +82,46 @@ Level = {
     fences:   [{ a:[x,y,z], b:[x,y,z], lean, height }], // one panel between posts, 0.1 m thick
     bales:    [{ x, y, z, yaw, radius, length, wrapped }], // round bale, horizontal axis along local X
     sandbags: [{ x, y, z, yaw, roll, layer }],          // single bags ≈ 0.62 x 0.2 x 0.3 m
+    // Optional fortifications (campaign map):
+    trenches: [{ points: [[x, y, z], ...], width }],    // zig-zag fire / communication trench centre line; no collider (low spoil banks)
+    dugouts:  [{ x, y, z, yaw, w, d, net, collapsed, player?, depth? }], // dug-in dugout: a low earth mound under a net (y = ground).
+                                                        // The player's (player: true) has a room `depth` m below ground, front wall
+                                                        // facing yaw (0 = −Z), and a ramp up from its rear door. Solid parts and
+                                                        // the ramp rect: dugoutBoxes() / dugoutRampRect() in src/sim/propColliders.js
+    masts:    [{ x, y, z, height }],                    // telescopic antenna mast (pole collider)
   },
+
+  // Optional, campaign only:
+  start?: { mode: 'foot', position: [x,y,z] /* feet */, yaw },  // begin on foot instead of in the drone
+  home?: dugout,            // the dugout the player starts in (same object as in props.dugouts, player: true)
+  linkOrigin?: [x,y,z],     // the video link is measured from here (mast top) instead of the launch spot
+  linkRangeM?: number,      // default 800
+  terrainHoles?: [[x0, z0, x1, z1], ...],  // world rects with no ground (the dugout ramp): the sim leaves them out of the
+                            // ground collider, the visuals discard the terrain there. heightAt() is unchanged.
 }
+
+Level enemy defs may also carry `mission: <id>` (a target of that mission) and `hold: true` (alerted infantry go flat and shift
+about their patrol line but never run off).
+Infantry within 32 m of a flying drone panic instead of running: they dodge sideways across its line, hit the dirt,
+throw their helmet or rifle at it (`entity_throw`) and now and then fire a burst (`entity_shot`, rarely a hit).
+Hitboxes: vehicles are compound boxes per variant (HIT_SHAPES: hull, turret, gun...); infantry boxes follow posture
+(standing, lying, seated).
+Level enemy defs may carry `speed` (m/s along the patrol), `route: true` (one way: past the last point the unit has
+escaped, status `'escaped'`, and the visuals hide it) and `waitFor: <mission id>` (parked until that mission starts;
+`'alert'`: until it hears the drone, then 4 s to start up and it drives off).
+An enemy def may carry `jammer: { range, full, power }` (an EW truck, variant `truck.ew`): once it is switched on (`waitFor`
+its mission) it drowns the link in line of sight, fully inside `full` m; ground, houses and trees in between block most of it.
+`state.link.jamming` 0..1 and an OSD `JAMMING` warning. Its mission counts it dealt with when the jamming stops.
+Campaign props: `camoNets: [{x, z, yaw, w, d, h}]` (net over a vehicle), `mortars: [{x, z, yaw}]` (tube + pit),
+`friendlies: [{x, z, yaw}]` (our men in a trench; `state.mission.casualties` of them are down).
+Missions may set `rough` (only a rough fix until the drone is close), `mortar` (shells our line: `mortar_fire` at the tube,
+then an `explosion` of kind `'mortar'` where it lands) and `pinned` (their MG fires `entity_shot` at our men; one is
+hit every so often, `friendly_hit`; all of them = failed).
+Missions end when every target is dealt with or escaped; `outroPartial` / `outroFailed` play when some / all got away,
+and the `mission` event (phase `'complete'`, or `'failed'` when any got away) carries `done, escaped`. A failed mission
+restarts: its targets are put back (`entities.resetUnits`) and its `retry` lines play instead of the intro.
+Level enemy defs may carry `riders: [variant, ...]`: infantry that ride on top of that vehicle (seats per
+variant in RIDER_SEATS, src/sim/entities.js) until it is knocked out or stops while they are alarmed.
 
 Everything in `props` except wires has a static collider (an explosion on one reports `surface: 'prop'`).
 Wires are crashable: flying into a cable while the motors are armed tangles the props and emits
@@ -97,6 +135,17 @@ normal impact rules.
 SimState = {
   time: number,              // sim seconds since level start
   paused: boolean,
+  mode: 'foot' | 'drone',    // 'foot' only on levels with `start`: the camera is the soldier's eyes (no feed, no OSD)
+  player: null | { position:[x,y,z] /* feet */, yaw, pitch, speed, nearGoggles },
+  prompt: null | 'goggles' | 'ungoggle',   // what the interact key would do now
+  mission: null | {         // campaign (level.missions, src/sim/missions.js). No map markers: the briefing is the other soldier's spotter feed
+    id, title, objective, phase: 'intro' | 'active' | 'outro' | 'done',
+    done, total,            // targets dealt with (dead, down, or vehicle knocked out) / all
+    speaker, line: string | null, lineId,   // subtitle on screen now; lineId changes with every new line (speak it once)
+    cutscene: null | { position:[x,y,z], target:[x,y,z], fovDeg },  // on foot: show the spotter feed from here instead of the eyes
+    bearing: null | { fromHome: { deg, m }, fromDrone: { deg, m } | null, moving: 'east' | ... | null }, // compass (0 = north = −Z) to the live targets
+    spotter: { position, target, fovDeg },  // what his drone sees all the time: the TV in the dugout (copies the cutscene while there is one)
+  },
   // There is no chase / third-person view: the game is FPV only.
 
   drone: {
@@ -199,6 +248,8 @@ SimState = {
       mobility: number,         // 0..1 (legs)
       bleeding: boolean,
       fromVehicle?: string,     // id of the vehicle a bailed-out crewman came from (variant 'crew')
+      riding: string | null,    // id of the vehicle he sits on top of (legs over the side); position = the point he sits on,
+                                // quaternion = the way he faces. null once he jumps or falls off
     },
   ],
 }
@@ -211,7 +262,7 @@ SimState = {
 | kind | variants | notes |
 |------|----------|-------|
 | `infantry` | `rifleman`, `mg`, `rpg`, `officer`, `crew` | `mg` carries a belt-fed machine gun, `rpg` a rocket launcher, `officer` has a pistol / binoculars and his shout alerts the squad from further away, `crew` = a bailed-out vehicle crewman (tanker helmet and coveralls; `fromVehicle` set) |
-| `light` | `uaz`, `pickup`, `technical` | UAZ-469-style jeep, pickup truck, pickup with a mounted heavy MG (`technical` tracks the drone with its gun: `turretYaw`) |
+| `light` | `uaz`, `pickup`, `technical`, `atv` | UAZ-469-style jeep, pickup truck, pickup with a mounted heavy MG (`technical` tracks the drone with its gun: `turretYaw`), quad bike with one rider (the `driver` crew seat, always visible) |
 | `truck` | `ural`, `kamaz`, `fuel` | Ural-4320 6x6, KamAZ-5350, fuel tanker (explodes big and fast) |
 | `apc` | `btr`, `bmp`, `mtlb` | BTR-80-style 8x8 (`wheels`, thin armour), BMP-2-style tracked IFV, MT-LB-style light carrier (no turret) |
 | `tank` | `t72`, `t80`, `t90` | T-72 (autoloader, turret often blows off), T-80 (gas turbine, quicker), T-90 (composite + reactive armour, wider hull) |
@@ -227,7 +278,8 @@ Every event has `{ type, time }` plus:
 | `armed`            | –            | motors started |
 | `disarmed`         | –            | motors stopped |
 | `collision`        | `position, normal, impactSpeed` | the drone bumped something but survived |
-| `crash`            | `position, impactSpeed, cause?: 'wire'` | the drone broke (`cause: 'wire'` = tangled in a telegraph cable) |
+| `crash`            | `position, impactSpeed, cause?: 'wire' \| 'shot'` | the drone broke (`cause: 'wire'` = tangled in a telegraph cable, `'shot'` = second hit from small arms) |
+| `drone_hit`        | `cause: 'bullet' \| 'thrown', position, hits` | a round or a thrown thing hit the drone (first one only knocks it) |
 | `reset`            | –            | drone respawned; visuals should clear trails, debris, etc. |
 | `explosion`        | see below | something blew up |
 | `drone_lost`       | `reason: 'detonated'`, `respawnIn` (s) | the drone is gone; `link.lost` is true (video feed is static) until the `reset` that follows |
@@ -242,6 +294,13 @@ Every event has `{ type, time }` plus:
 | `targets_reset`    | –            | all enemies respawned at their start (ids unchanged): clear wrecks, fires and corpses |
 | `entity_alerted`   | `entityId, position` | a unit noticed the drone (visuals may play a shout / turn head); optional to use |
 | `link_lost` / `link_restored` | – | signal fell below 0.08 / recovered (not sent for the detonation cut, see `drone_lost`) |
+| `mission`          | `id, phase: 'intro' \| 'active' \| 'complete', title` | campaign mission started / objective live / all targets dealt with |
+| `mission_line`     | `speaker, text, lineId, radio?` | the other soldier says something (`radio`: a bearing call while you fly) |
+| `mortar_fire`      | `position` | a mortar tube fires (flash and smoke at the muzzle) |
+| `friendly_hit`     | `index, casualties, count` | one of our pinned men was hit |
+| `entity_shot`      | `entityId, from:[x,y,z], to:[x,y,z], hit` | a panicked soldier fires a round at the drone (muzzle flash + tracer) |
+| `entity_throw`     | `entityId, item: 'helmet' \| 'rifle', position, velocity` | he throws it at the drone: it flies ballistically from there |
+| `mode`             | `mode: 'foot' \| 'drone'` | goggles on / off (campaign). After a detonation the next drone is put by the mast and you are back on foot |
 
 `explosion` fields:
 
@@ -278,6 +337,9 @@ when `surface === 'ground'`, a scorch decal on buildings, fragment sparks out to
 Controls = {
   throttle: 0..1, yaw: -1..1, pitch: -1..1, roll: -1..1, // pitch +1 = stick forward (nose down), roll +1 = right, yaw +1 = right
   arm, reset, toggleMode, pause, fire, resetTargets,        // edge-triggered booleans (true for one poll); fire = detonate
+  skipMission,                                              // campaign: key 7 skips to the next mission
+  interact, goggles,                                        // on foot: either puts the goggles on (at the table); flying: goggles takes them off
+  moveX, moveZ: -1..1, lookX, lookY: radians this poll, sprint: boolean,   // on foot (moveZ +1 = forward, lookX + = turn right)
 }
 ```
 

@@ -89,6 +89,20 @@ export const VARIANTS = {
       seats: [seat('driver', [-0.5, 0.5, -0.4], 0.9, 1), seat('troop', [0.5, 0.5, -0.4], 0.9, 1)],
       parts: { engine: part([0, 0.45, -0.8], 0.6), fuel: part([0, 0.25, 0.4], 0.5) },
     },
+    atv: {                                                   // quad bike: one rider, fast, no protection at all
+      size: [1.2, 1.3, 2.1], walk: 8, run: 17, turnRate: 2.6, accel: 7, frag: 0.8, blast: 1.1, hearing: 35,
+      seats: [seat('driver', [0, 0.65, 0.1], 1.0, 1)],
+      parts: { engine: part([0, 0.35, 0], 0.35), fuel: part([0, 0.55, -0.35], 0.25) },
+      crewBlast: 1.0, crewFrag: 1.8, crewShield: 1, engineBlast: 0.7, engineFrag: 0.8, fuelFrag: 0.7, fuelFire: 0.6,
+      cookoff: { chance: 0.3, delay: [0.5, 1.5], kind: 'vehicle', chargeKg: 0.05, radius: 1.5, fragmentRadius: 4, fragmentLethality: 0.15 },
+    },
+    moto: {                                                  // dirt bike: one rider, the fastest thing on the road
+      size: [0.8, 1.2, 2.1], walk: 8, run: 19, turnRate: 2.8, accel: 8, frag: 1.0, blast: 1.2, hearing: 35,
+      seats: [seat('driver', [0, 0.75, 0.25], 1.0, 1)],
+      parts: { engine: part([0, 0.4, 0], 0.3), fuel: part([0, 0.85, -0.3], 0.2) },
+      crewBlast: 1.0, crewFrag: 1.9, crewShield: 1, engineBlast: 0.7, engineFrag: 0.8, fuelFrag: 0.7, fuelFire: 0.6,
+      cookoff: { chance: 0.2, delay: [0.5, 1.5], kind: 'vehicle', chargeKg: 0.03, radius: 1.2, fragmentRadius: 3, fragmentLethality: 0.1 },
+    },
     technical: {                                             // pickup with a mounted heavy MG
       size: [2.0, 2.3, 5.2], run: 19, turret: 2.0, hearing: 25,
       seats: [seat('driver', [-0.5, 0.45, -0.4], 0.9, 1), seat('troop', [0.5, 0.45, -0.4], 0.9, 1), seat('gunner', [0, 0.9, 0.45], 1.0, 1)],
@@ -98,6 +112,11 @@ export const VARIANTS = {
   truck: {
     ural: {},                                                // Ural-4320 style 6x6 cargo truck
     kamaz: { size: [2.5, 3.1, 7.8], run: 16, blast: 0.85 },  // KamAZ-5350 style, quicker
+    ew: {                                                    // electronic-warfare truck: a box body full of jammers, antennas on top
+      size: [2.5, 3.6, 7.4], run: 11, walk: 5,
+      seats: [seat('driver', [-0.5, 0.55, -0.7], 0.6, 0.2), seat('troop', [0.5, 0.55, -0.7], 0.6, 0.1), seat('troop', [0, 0.6, 1.4], 0.8, 0)],
+      parts: { engine: part([0, 0.4, -0.75], 0.9), fuel: part([0.5, 0.25, -0.05], 0.6), ew: part([0, 0.62, 0.25], 1.3), mast: part([0, 0.95, 0.45], 0.6, true) },
+    },
     fuel: {                                                  // tanker: one hit and it goes up
       size: [2.5, 3.0, 8.0], run: 11, walk: 5,
       seats: [seat('driver', [-0.5, 0.45, -0.75], 0.6, 0.2)],
@@ -145,6 +164,53 @@ export const VARIANTS = {
     },
   },
 };
+
+// Where troops ride on the outside of a vehicle ("riders" in a level's enemy def): hull-local seat
+// surface [x, y, z] and the way the man faces (yaw relative to the hull; ±π/2 = sideways, legs over
+// the edge). Filled in order.
+const SIDE = Math.PI / 2;
+export const RIDER_SEATS = {
+  pickup: [[0.9, 1.28, 0.9, -SIDE], [-0.9, 1.28, 1.2, SIDE], [0.9, 1.28, 2.0, -SIDE], [-0.9, 1.28, 2.2, SIDE]],
+  technical: [[0.9, 1.28, 0.4, -SIDE], [-0.9, 1.28, 0.6, SIDE], [-0.9, 1.28, 2.2, SIDE]],
+  uaz: [[0.55, 1.92, 1.2, -SIDE], [-0.55, 1.92, 1.5, SIDE]],
+  btr: [[1.0, 2.06, 0.9, -SIDE], [-1.0, 2.06, 1.3, SIDE], [0.95, 2.04, 2.4, -SIDE], [-0.95, 2.04, 2.7, SIDE], [0.3, 2.05, 3.2, Math.PI]],
+  bmp: [[1.15, 1.55, 1.2, -SIDE], [-1.15, 1.55, 1.5, SIDE], [1.1, 1.52, 2.4, -SIDE], [-1.1, 1.52, 2.6, SIDE]],
+  mtlb: [[1.05, 1.66, 0.3, -SIDE], [-1.05, 1.66, 0.6, SIDE], [1.05, 1.64, 1.8, -SIDE], [-1.05, 1.64, 2.1, SIDE], [0, 1.64, 2.9, Math.PI]],
+  ural: [[0.9, 2.75, 1.0, -SIDE], [-0.9, 2.75, 1.6, SIDE]],
+};
+
+// Collision shapes: a vehicle is a stack of boxes that hugs the model (hull + turret / cab), not
+// one big bounding box with empty corners. Fractions of size [w, h, d]: centre and half extents.
+const HIT_SHAPES = {
+  tank: [{ c: [0, 0.25, 0], h: [0.5, 0.25, 0.5] }, { c: [0, 0.68, 0.0], h: [0.31, 0.18, 0.23] }, { c: [0, 0.68, -0.38], h: [0.03, 0.04, 0.17] }],
+  btr: [{ c: [0, 0.43, 0], h: [0.5, 0.43, 0.5] }, { c: [0, 0.92, -0.08], h: [0.17, 0.08, 0.1] }],
+  bmp: [{ c: [0, 0.36, 0], h: [0.5, 0.36, 0.5] }, { c: [0, 0.8, -0.05], h: [0.25, 0.09, 0.15] }],
+  mtlb: [{ c: [0, 0.42, 0], h: [0.5, 0.42, 0.5] }],
+  uaz: [{ c: [0, 0.31, 0], h: [0.5, 0.31, 0.5] }, { c: [0, 0.81, 0.12], h: [0.47, 0.19, 0.33] }],
+  pickup: [{ c: [0, 0.3, 0], h: [0.5, 0.3, 0.5] }, { c: [0, 0.79, -0.12], h: [0.47, 0.18, 0.19] }],
+  technical: [{ c: [0, 0.26, 0], h: [0.5, 0.26, 0.5] }, { c: [0, 0.68, -0.12], h: [0.47, 0.15, 0.19] }, { c: [0, 0.75, 0.27], h: [0.15, 0.2, 0.1] }],
+  atv: [{ c: [0, 0.4, 0], h: [0.5, 0.4, 0.5] }],
+  moto: [{ c: [0, 0.4, 0], h: [0.35, 0.4, 0.5] }],
+  ew: [{ c: [0, 0.3, 0], h: [0.5, 0.3, 0.5] }, { c: [0, 0.68, -0.38], h: [0.47, 0.17, 0.11] }, { c: [0, 0.65, 0.2], h: [0.49, 0.25, 0.3] }],
+};
+
+// A jammer is on while its truck still works and the jamming gear in the box body is intact.
+export function jamming(e) {
+  if (!e.jam || !e.go || e.destroyed) return false;
+  const v = e.v;
+  return v.operational && !v.abandoned && v.comps.ew?.state !== 'destroyed' && v.comps.mast?.state !== 'destroyed';
+}
+// Infantry by posture: standing, lying (prone, crawling, down, dead) and sitting on a vehicle.
+const INF_SHAPES = {
+  stand: { c: [0, 0.9, 0], h: [0.25, 0.9, 0.2] },
+  lying: { c: [0, 0.18, 0], h: [0.3, 0.18, 0.95] },
+  sit: { c: [0, 0.5, -0.15], h: [0.25, 0.5, 0.35] },
+};
+
+// Panic: when the drone gets close, men dodge side to side, drop flat, now and then shoot at it or
+// throw their helmet or rifle at it. They don't run off.
+const PANIC_RANGE = 32;
+const SHOT_HIT_CHANCE = 0.035; // per round, at point blank; falls off with range and drone speed
 
 export function resolveType(kind, variant) {
   const base = ENTITY_TYPES[kind];
@@ -214,6 +280,7 @@ export function createEntities(ctx) {
         bailing: false, abandoned: false, fire: 'none', smoke: 'none', components: {},
       } : {
         condition: 'ok', wounds: { head: 1, torso: 1, armL: 1, armR: 1, legL: 1, legR: 1 }, mobility: 1, bleeding: false,
+        riding: null, // vehicle id while sitting on top of it (position = the point he sits on)
         ...(e.fromVehicle ? { fromVehicle: e.fromVehicle } : {}),
       }),
     };
@@ -225,8 +292,15 @@ export function createEntities(ctx) {
     const id = dynamic ? `c${nextCrewId++}` : `e${nextId++}`;
     const e = {
       id, kind: def.kind, def: type, dynamic, fromVehicle: extra.fromVehicle,
+      tag: def.mission ?? null,   // mission id this unit is a target of
+      hold: !!def.hold,           // holds its ground: takes cover and moves about, never runs off
       spawn: { x: def.position[0], z: def.position[1], yaw: def.yaw ?? 0 },
       patrol: def.patrol ?? null, idleTime: def.idleTime ?? (type.vehicle ? 2 : 4),
+      cruise: def.speed ?? null,      // m/s along the patrol, instead of the type's walk speed
+      route: !!def.route,             // one way: at the last point it has got away (escaped)
+      waitFor: def.waitFor ?? null,   // parked until that mission starts (missions.js sets go); 'alert': until it hears the drone
+      go: false, escaped: false,
+      jam: def.jammer ?? null,        // { range, power }: jams our link (src/sim/index.js) once its mission starts
       x: 0, z: 0, y: 0, yaw: 0, speed: 0, pitch: 0, roll: 0, mult: 1,
       health: 1, status: 'idle', destroyed: false, onFire: false, fireUntil: 0,
       wp: 0, waitUntil: 0, alerted: false, noticeT: 0, reactAfter: 0.6 + rand() * 1.0, calmT: 0,
@@ -237,8 +311,19 @@ export function createEntities(ctx) {
     e.body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased()
       .setTranslation(e.spawn.x, level.terrain.heightAt(e.spawn.x, e.spawn.z), e.spawn.z));
     const [w, h, d] = type.size;
-    e.collider = world.createCollider(RAPIER.ColliderDesc.cuboid(w / 2, h / 2, d / 2).setTranslation(0, h / 2, 0), e.body);
-    ctx.registerCollider(e.collider.handle, id);
+    const shapes = type.vehicle ? (HIT_SHAPES[type.variant] ?? HIT_SHAPES[def.kind] ?? [{ c: [0, 0.5, 0], h: [0.5, 0.5, 0.5] }]) : [INF_SHAPES.stand];
+    e.colliders = shapes.map((sh) => {
+      const desc = type.vehicle
+        ? RAPIER.ColliderDesc.cuboid(sh.h[0] * w, sh.h[1] * h, sh.h[2] * d).setTranslation(sh.c[0] * w, sh.c[1] * h, sh.c[2] * d)
+        : RAPIER.ColliderDesc.cuboid(...sh.h).setTranslation(...sh.c);
+      const c = world.createCollider(desc, e.body);
+      ctx.registerCollider(c.handle, id);
+      return c;
+    });
+    e.collider = e.colliders[0];
+    e.posture = 'stand';
+    e.armed = type.vehicle ? false : def.variant !== 'officer'; // can shoot at the drone (officers: pistol, they don't bother)
+    e.helmet = !type.vehicle;
     e.s = makeState(e);
     list.push(e);
     states.push(e.s);
@@ -252,12 +337,51 @@ export function createEntities(ctx) {
       applyDamage: (hit) => applyDamage(e, hit),
     });
     place(e);
+    // Troops riding on top: infantry entities that move with the hull until they jump off.
+    const seats = RIDER_SEATS[type.variant] ?? [];
+    (def.riders ?? []).slice(0, seats.length).forEach((variant, i) => {
+      const r = spawn({ kind: 'infantry', variant, position: [def.position[0], def.position[1]], yaw: def.yaw ?? 0 });
+      r.rideSpawn = { veh: e, seat: seats[i] };
+      r.ride = r.rideSpawn;
+      follow(r);
+    });
     return e;
+  }
+
+  // Sit a rider on his seat on the hull.
+  function follow(r) {
+    const { veh, seat } = r.ride;
+    _e.set(veh.pitch, veh.yaw, veh.roll, 'YXZ');
+    _q.setFromEuler(_e);
+    const w = _loc.set(seat[0], seat[1], seat[2]).applyQuaternion(_q);
+    r.x = veh.x + w.x; r.y = veh.y + w.y; r.z = veh.z + w.z;
+    r.yaw = veh.yaw + seat[3]; r.pitch = veh.pitch; r.roll = veh.roll; r.speed = 0;
+    r.status = 'idle';
+    sync(r);
+    r.s.riding = veh.id;
+    r.s.velocity[0] = -Math.sin(veh.yaw) * veh.speed; r.s.velocity[2] = -Math.cos(veh.yaw) * veh.speed;
+  }
+
+  // Off the vehicle: down to the ground on his side of the hull.
+  function dismount(r) {
+    const { veh, seat } = r.ride;
+    r.ride = null;
+    r.s.riding = null;
+    const side = Math.sign(seat[0]) || 1, c = Math.cos(veh.yaw), sn = Math.sin(veh.yaw);
+    const lx = side * (veh.def.size[0] / 2 + 0.7), lz = seat[2];
+    r.x = veh.x + lx * c + lz * sn; r.z = veh.z - lx * sn + lz * c;
+    r.pitch = r.roll = 0;
+    if (r.alerted && r.cond === 'ok') {
+      r.mode = 'prone';
+      r.proneUntil = time + PRONE_SECONDS;
+      r.fleeHeading = Math.atan2(r.x - veh.x, r.z - veh.z) + Math.PI + (rand() - 0.5);
+    }
+    ground(r); sync(r);
   }
 
   function remove(e) {
     ctx.damage.unregister(e.id);
-    ctx.unregisterCollider?.(e.collider.handle);
+    for (const c of e.colliders) ctx.unregisterCollider?.(c.handle);
     world.removeRigidBody(e.body);
     list.splice(list.indexOf(e), 1);
     states.splice(states.indexOf(e.s), 1);
@@ -269,6 +393,10 @@ export function createEntities(ctx) {
     e.wp = 0; e.waitUntil = time + rand() * 3;
     e.alerted = false; e.noticeT = 0; e.calmT = 0; e.mode = 'patrol'; e.proneUntil = 0;
     e.reactAfter = 0.6 + rand() * 1.0;
+    e.go = false; e.escaped = false; e.goAt = 0;
+    e.ride = e.rideSpawn ?? null;
+    if (!e.def.vehicle) { e.armed = e.def.variant !== 'officer'; e.helmet = true; e.act = null; e.actUntil = 0; }
+    if (e.s) e.s.riding = e.ride ? e.ride.veh.id : null;
     if (e.def.vehicle) {
       initVehicle(e, rand); e.health = vehicleHealth(e);
       e.s.weakSpots = Object.entries(e.v.comps).map(([name, c]) => ({ name, position: c.position, radius: c.radius }));
@@ -305,7 +433,7 @@ export function createEntities(ctx) {
     if (e.def.vehicle) {
       const v = e.v;
       const burning = e.destroyed ? time < e.fireUntil : v.fire !== 'none';
-      s.status = e.destroyed ? 'destroyed' : (v.abandoned || !v.operational) ? 'disabled' : e.status;
+      s.status = e.destroyed ? 'destroyed' : (v.abandoned || !v.operational) ? 'disabled' : e.escaped ? 'escaped' : e.status;
       s.onFire = burning;
       s.fire = burning ? (v.fire === 'none' ? 'full' : v.fire) : 'none';
       s.smoke = e.destroyed ? (burning ? 'heavy' : 'light') : v.smoke;
@@ -317,6 +445,14 @@ export function createEntities(ctx) {
     } else {
       const c = e.w;
       s.status = e.cond === 'dead' ? 'destroyed' : (e.cond === 'ok' ? e.status : e.cond);
+      // The hitbox follows the body: lying flat is a low long box, riding is a seated one.
+      const posture = e.ride ? 'sit' : (s.status === 'prone' || s.status === 'crawling' || s.status === 'down' || s.status === 'destroyed') ? 'lying' : 'stand';
+      if (posture !== e.posture) {
+        e.posture = posture;
+        const sh = INF_SHAPES[posture];
+        e.collider.setHalfExtents({ x: sh.h[0], y: sh.h[1], z: sh.h[2] });
+        e.collider.setTranslationWrtParent({ x: sh.c[0], y: sh.c[1], z: sh.c[2] });
+      }
       s.onFire = false; s.damage = 'none';
       s.condition = e.cond; s.mobility = infantryMobility(e); s.bleeding = e.bleeding;
       s.wounds.head = c.head; s.wounds.torso = c.torso; s.wounds.armL = c.armL; s.wounds.armR = c.armR; s.wounds.legL = c.legL; s.wounds.legR = c.legR;
@@ -330,6 +466,10 @@ export function createEntities(ctx) {
 
   function boxDistance(e, p) {
     const l = toLocal(e, p);
+    if (!e.def.vehicle) {
+      const sh = INF_SHAPES[e.posture ?? 'stand'];
+      return Math.hypot(Math.max(0, Math.abs(l.x - sh.c[0]) - sh.h[0]), Math.max(0, Math.abs(l.y - sh.c[1]) - sh.h[1]), Math.max(0, Math.abs(l.z - sh.c[2]) - sh.h[2]));
+    }
     const [w, h, d] = e.def.size;
     const dx = Math.max(0, Math.abs(l.x) - w / 2), dy = Math.max(0, Math.abs(l.y - h / 2) - h / 2), dz = Math.max(0, Math.abs(l.z) - d / 2);
     return Math.hypot(dx, dy, dz);
@@ -376,6 +516,7 @@ export function createEntities(ctx) {
 
   function killInfantry(e, cause) {
     if (e.destroyed) return;
+    if (e.ride) dismount(e); // falls off
     e.destroyed = true; e.speed = 0; e.health = 0;
     sync(e);
     ctx.emit({ type: 'entity_destroyed', entityId: e.id, kind: e.kind, position: [e.x, e.y + e.def.size[1] / 2, e.z], cause });
@@ -449,18 +590,30 @@ export function createEntities(ctx) {
     e.z = Math.max(-half, Math.min(half, e.z));
   }
 
-  function patrol(e, dt) {
+  function patrol(e, dt, push = 1) {
     const def = e.def;
+    if (e.waitFor === 'alert' && (e.alerted || e.goAt) && !e.go) {
+      // Heard it: a few seconds to start the engine, then off down its way out.
+      if (!e.goAt) e.goAt = time + 4;
+      if (time >= e.goAt) e.go = true;
+    }
+    if (e.escaped || (e.waitFor && !e.go)) { steer(e, dt, e.yaw, 0); return; }
     if (!e.patrol || e.patrol.length < 2 || time < e.waitUntil) { steer(e, dt, e.yaw, 0); return; }
     const [tx, tz] = e.patrol[e.wp];
     const dx = tx - e.x, dz = tz - e.z;
-    if (Math.hypot(dx, dz) < (def.vehicle ? 4 : 1.2)) {
-      e.wp = (e.wp + 1) % e.patrol.length;
-      e.waitUntil = time + e.idleTime * (0.6 + rand() * 0.8);
-      steer(e, dt, e.yaw, 0);
-      return;
+    if (Math.hypot(dx, dz) < (def.vehicle ? (e.route ? 10 : 4) : 1.2)) {
+      if (e.route) {
+        // A run down a road: no stops, and past the last point it has got away.
+        if (e.wp === e.patrol.length - 1) { e.escaped = true; e.speed = 0; return; }
+        e.wp++;
+      } else {
+        e.wp = (e.wp + 1) % e.patrol.length;
+        e.waitUntil = time + e.idleTime * (0.6 + rand() * 0.8);
+        steer(e, dt, e.yaw, 0);
+        return;
+      }
     }
-    steer(e, dt, Math.atan2(-dx, -dz), def.walk);
+    steer(e, dt, Math.atan2(-dx, -dz), (e.cruise ?? def.walk) * push);
   }
 
   // How well a unit can move: vehicles by mobility kill, wounded infantry by their legs.
@@ -477,6 +630,73 @@ export function createEntities(ctx) {
     return !!g && aliveCrew(g) && !(v.comps.turret && v.comps.turret.state === 'destroyed');
   }
 
+  // A few steps about the spot they started from.
+  function wander(e, dt) {
+    if (!e.wanderTo || Math.hypot(e.wanderTo[0] - e.x, e.wanderTo[1] - e.z) < 0.8) {
+      if (e.wanderTo && time < e.waitUntil) { steer(e, dt, e.yaw, 0); return; }
+      const a = rand() * Math.PI * 2, r = 2 + rand() * 6;
+      e.wanderTo = [e.spawn.x + Math.cos(a) * r, e.spawn.z + Math.sin(a) * r];
+      e.waitUntil = time + 1 + rand() * 3;
+    }
+    steer(e, dt, Math.atan2(-(e.wanderTo[0] - e.x), -(e.wanderTo[1] - e.z)), e.def.walk);
+  }
+
+  function panic(e, dt, drone, dist) {
+    const def = e.def;
+    const toDrone = Math.atan2(-(drone.position[0] - e.x), -(drone.position[2] - e.z)); // heading that faces it
+    if (e.mode !== 'panic') { e.mode = 'panic'; e.act = null; e.actUntil = 0; e.dodge = rand() < 0.5 ? 1 : -1; }
+    if (time >= e.actUntil) {
+      // Pick the next thing to do. Mostly dodging; shooting and throwing are rarer.
+      const r = rand();
+      const canThrow = e.helmet || e.armed;
+      if (r < 0.1 && e.armed && def.variant !== 'rpg') { e.act = 'shoot'; e.actUntil = time + 1.2 + rand() * 1.3; e.nextShot = time + 0.35; }
+      else if (r < 0.19 && canThrow && dist < 22) { e.act = 'throw'; e.actUntil = time + 0.9; e.thrown = false; }
+      else if (r < 0.34) { e.act = 'drop'; e.actUntil = time + 1.2 + rand() * 1.8; }
+      else { e.act = 'dodge'; e.actUntil = time + 0.6 + rand() * 1.1; if (rand() < 0.75) e.dodge = -e.dodge; }
+    }
+    if (e.act === 'dodge') {
+      // Sideways across its line of flight, ducking this way and that.
+      steer(e, dt, toDrone + e.dodge * Math.PI / 2, def.run * 0.75);
+      e.yaw = toDrone + e.dodge * Math.PI / 2;
+      e.status = 'moving';
+    } else if (e.act === 'drop') {
+      steer(e, dt, e.yaw, 0);
+      e.status = 'prone';
+    } else {
+      // Stand and face it.
+      steer(e, dt, toDrone, 0);
+      e.status = 'idle';
+      if (e.act === 'shoot' && time >= e.nextShot) shoot(e, drone, dist);
+      if (e.act === 'throw' && !e.thrown && time > e.actUntil - 0.45) throwAt(e, drone, dist);
+    }
+  }
+
+  function shoot(e, drone, dist) {
+    e.nextShot = time + (e.def.variant === 'mg' ? 0.09 : 0.14) + rand() * 0.12;
+    const spd = drone.speed ?? 0;
+    const p = SHOT_HIT_CHANCE * Math.max(0, 1 - dist / 45) * (spd < 6 ? 1.6 : spd > 20 ? 0.5 : 1);
+    const hit = rand() < p;
+    const miss = hit ? 0 : 0.6 + dist * 0.06;
+    const to = [drone.position[0] + (rand() - 0.5) * miss, drone.position[1] + (rand() - 0.5) * miss, drone.position[2] + (rand() - 0.5) * miss];
+    ctx.emit({ type: 'entity_shot', entityId: e.id, from: [e.x, e.y + 1.45, e.z], to, hit });
+    if (hit) ctx.droneHit?.('bullet');
+  }
+
+  function throwAt(e, drone, dist) {
+    e.thrown = true;
+    const item = e.helmet && (!e.armed || rand() < 0.6) ? 'helmet' : 'rifle';
+    if (item === 'helmet') e.helmet = false; else e.armed = false;
+    const from = [e.x, e.y + 1.6, e.z];
+    const T = Math.min(1.3, Math.max(0.45, dist / 13));
+    const g = 9.81;
+    let vx = (drone.position[0] - from[0]) / T, vz = (drone.position[2] - from[2]) / T;
+    let vy = (drone.position[1] - from[1]) / T + 0.5 * g * T;
+    const sp = Math.hypot(vx, vy, vz), max = 16;
+    if (sp > max) { vx *= max / sp; vy *= max / sp; vz *= max / sp; }
+    ctx.emit({ type: 'entity_throw', entityId: e.id, item, position: from, velocity: [vx, vy, vz] });
+    if (dist < 7 && rand() < 0.2) ctx.droneHit?.('thrown');
+  }
+
   function react(e, dt, drone) {
     const def = e.def;
     const dx = e.x - drone.position[0], dz = e.z - drone.position[2];
@@ -488,22 +708,31 @@ export function createEntities(ctx) {
       e.turretYaw = approach(e.turretYaw, Math.atan2(-l.x, -l.z), def.turret * dt);
     }
     if (!def.vehicle) {
-      if (e.mode === 'patrol') { // first reaction: run or hit the dirt
-        e.mode = rand() < 0.4 ? 'prone' : 'flee';
-        e.proneUntil = time + PRONE_SECONDS;
-        e.fleeHeading = away + (rand() - 0.5) * 1.2;
+      const d3 = Math.hypot(dx, e.y - drone.position[1], dz);
+      // Bailed-out crews get away from the burning wreck; everybody else stays where they are.
+      if (e.mode === 'flee') {
+        steer(e, dt, e.fleeHeading, def.run);
+        e.status = 'fleeing';
+        if (time > e.proneUntil + 6) e.mode = 'prone';
+        return;
       }
+      if (d3 < PANIC_RANGE && drone.active) { panic(e, dt, drone, d3); return; }
+      if (e.mode === 'panic') e.mode = 'prone';
+      // Further off: drop flat for a few seconds, get up and shift about their stretch, drop again.
+      if (e.mode !== 'prone' && e.mode !== 'shift') { e.mode = 'prone'; e.proneUntil = time + 2 + rand() * 4; }
       if (e.mode === 'prone') {
         steer(e, dt, e.yaw, 0);
         e.status = 'prone';
-        if (time > e.proneUntil && dist < 45) { e.mode = 'flee'; e.fleeHeading = away; }
-        else if (time > e.proneUntil) e.alerted = false;
+        if (time > e.proneUntil) { e.mode = 'shift'; e.proneUntil = time + 4 + rand() * 6; e.waitUntil = 0; }
       } else {
-        steer(e, dt, e.fleeHeading, def.run);
-        e.status = 'fleeing';
+        if (e.patrol && e.patrol.length >= 2) patrol(e, dt); else wander(e, dt);
+        e.status = e.speed > 0.2 ? 'moving' : 'idle';
+        if (time > e.proneUntil) { e.mode = 'prone'; e.proneUntil = time + 3 + rand() * 6; }
       }
       return;
     }
+    // Vehicles on a run keep to the road and put their foot down.
+    if (e.route) { patrol(e, dt, 1.12); e.status = e.speed > 0.3 ? 'fleeing' : 'idle'; return; }
     // Vehicles: trucks and APCs drive off when it gets close, tanks stand and turn the turret.
     const bolt = e.mult > 0 && (e.kind === 'truck' || e.kind === 'light' || (e.kind === 'apc' && dist < 50));
     if (bolt) { steer(e, dt, away, def.run); e.status = 'fleeing'; } else { steer(e, dt, e.yaw, 0); e.status = 'idle'; }
@@ -532,6 +761,20 @@ export function createEntities(ctx) {
         e.health = infantryHealth(e);
         killInfantry(e, 'bleedout');
         continue;
+      }
+      if (e.ride) {
+        // Riding: jump off when the vehicle is knocked out, or stops while they're alarmed;
+        // the wounded fall off.
+        const veh = e.ride.veh;
+        const stop = veh.destroyed || veh.v.abandoned || !veh.v.operational || veh.v.mobility === 'immobilized';
+        if (stop || e.cond !== 'ok' || (e.alerted && veh.speed < 1.5)) dismount(e);
+        else {
+          if (drone.active && !e.alerted && Math.hypot(e.x - drone.position[0], e.y - drone.position[1], e.z - drone.position[2]) < e.def.hearing + drone.speed * 4) {
+            e.noticeT += dt; if (e.noticeT > e.reactAfter) alert(e);
+          }
+          follow(e);
+          continue;
+        }
       }
       e.mult = moveFactor(e);
       if (!e.def.vehicle && (e.cond === 'down' || e.cond === 'crawling')) {
@@ -564,6 +807,14 @@ export function createEntities(ctx) {
     }
   }
 
+  // Put some units back as they started (a mission restart): their bailed-out crews go, their
+  // riders get back on.
+  function resetUnits(units) {
+    const ids = new Set(units.map((e) => e.id));
+    for (const e of [...list]) if (e.dynamic && ids.has(e.fromVehicle)) remove(e);
+    for (const e of list) if (ids.has(e.id) || (e.rideSpawn && ids.has(e.rideSpawn.veh.id))) place(e);
+  }
+
   function reset() {
     time = 0;
     nextCrewId = 0;
@@ -574,7 +825,7 @@ export function createEntities(ctx) {
   for (const def of level.enemies ?? []) spawn(def);
 
   return {
-    list, states, update, reset,
+    list, states, update, reset, resetUnits,
     get alive() { return list.filter((e) => !e.destroyed).length; },
     byId: (id) => list.find((e) => e.id === id),
   };
