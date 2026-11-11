@@ -146,6 +146,12 @@ export function createOSD() {
     text(`${String(Math.round(hud.throttlePct)).padStart(3, ' ')}%`, R, row(14), 'right');
     icon('h', R - CW * 5.4, row(14));
 
+    // Warhead state under the mode, when the sim reports one.
+    if (hud.warhead && hud.warhead !== 'NONE') {
+      const arming = hud.warhead === 'SAFE' && hud.warheadArmInM > 0;
+      if (hud.warhead !== 'ARMED' || blink) text(arming ? `ARM IN ${Math.ceil(hud.warheadArmInM)}M` : `WH ${hud.warhead}`, L, row(3));
+    }
+
     // Warnings blink in the lower centre, as flight controllers do.
     const warn = hud.warnings.filter((w) => w !== 'DISARMED');
     if (warn.length && blink) warn.slice(0, 2).forEach((w, i) => text(w, cx, row(11 + i), 'center'));

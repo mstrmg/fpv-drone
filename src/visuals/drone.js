@@ -1,5 +1,5 @@
-// The player's quad: a 7-inch carbon FPV frame with top-mounted battery, seen in chase view and,
-// at the edges of the frame, from its own camera.
+// The player's quad: a 7-inch carbon FPV frame with top-mounted battery, seen at the edges of the
+// frame from its own camera and from outside by the spotter.
 import * as THREE from 'three';
 import { makeCarbonTexture, makePropBlurTexture } from './textures.js';
 
@@ -104,15 +104,111 @@ export function createDrone({ scene }) {
     rx.rotation.set(0.5, 0, -s * 0.5);
   }
 
+  // Warhead slung under the frame: a shaped-charge round held on with tape, fuse wires at the nose.
+  const olive = std({ color: 0x3f4a2c, roughness: 0.7, metalness: 0.2 });
+  const tape = std({ color: 0x9a9a94, roughness: 0.8 });
+  const war = new THREE.Group();
+  war.position.set(0, -0.052, -0.02);
+  war.rotation.x = Math.PI / 2; // cylinders run along the body's Z axis
+  group.add(war);
+  add(cyl(0.036, 0.036, 0.11, 18), olive, 0, 0.0, 0, war);
+  add(cyl(0.012, 0.036, 0.1, 18), olive, 0, -0.105, 0, war);   // nose cone, pointing forward
+  add(cyl(0.008, 0.012, 0.03, 12), steel, 0, -0.17, 0, war);   // fuse
+  add(cyl(0.036, 0.016, 0.05, 18), olive, 0, 0.08, 0, war);
+  add(cyl(0.016, 0.016, 0.12, 12), olive, 0, 0.165, 0, war);   // tail tube
+  add(cyl(0.0372, 0.0372, 0.018, 18), tape, 0, -0.03, 0, war);
+  add(cyl(0.0372, 0.0372, 0.018, 18), tape, 0, 0.035, 0, war);
+  // Contact fuse wires, as on the real drones: two thin white leads from the fuse on the warhead nose,
+  // bent up into the bottom of the camera's view in wide sweeps out to either side, one of them
+  // coiled into a loop. On impact they touch and fire the charge. They are floppy, so they lag,
+  // whip and buzz with the drone: the bend is a spring-damper per wire (see update), applied in the
+  // vertex shader.
+  const wireMat = std({ color: 0xdedcd4, roughness: 0.55, metalness: 0.05 });
+  const bendU = { uTipL: { value: new THREE.Vector3() }, uTipR: { value: new THREE.Vector3() } };
+  wireMat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, bendU);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aBend;\nuniform vec3 uTipL, uTipR;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        float bw = abs(aBend);
+        transformed += (aBend < 0.0 ? uTipL : uTipR) * (bw * bw * (3.0 - bw) * 0.5); // cantilever shape`);
+  };
+  wireMat.customProgramCacheKey = () => 'fuse-wire';
+  add(box(0.03, 0.016, 0.014), dark, 0, -0.05, -0.212);                  // fuse cap the leads come out of
+  add(box(0.032, 0.006, 0.0145), tape, 0, -0.05, -0.212);
+  // Points placed by where they appear in the picture: (x, y) across the frame (-1..1, y up) at a
+  // distance d in front of the lens, for the FPV camera on its 30 degree mount.
+  const camC = new THREE.Vector3(0, 0.03, -0.09), camF = new THREE.Vector3(0, 0.5, -0.866), camU = new THREE.Vector3(0, 0.866, 0.5);
+  const S = (x, y, d) => camC.clone().addScaledVector(camF, d).add(new THREE.Vector3(x * 1.44 * d, 0, 0)).addScaledVector(camU, y * 0.81 * d);
+  const loop = (cx, cy, rx, ry, d0, d1, a0, turns, n) => Array.from({ length: n }, (_, i) => {
+    const a = a0 - (i / n) * turns * Math.PI * 2;
+    return S(cx + Math.cos(a) * rx, cy + Math.sin(a) * ry, d0 + (d1 - d0) * (0.5 + 0.5 * Math.sin(a)));
+  });
+  const leads = [
+    // Left: up from the nose, then a long sweep out to the left edge.
+    { sx: -1, pts: [new THREE.Vector3(-0.005, -0.046, -0.218), S(-0.04, -1.3, 0.15), S(-0.16, -0.95, 0.19), S(-0.36, -0.68, 0.23),
+      S(-0.62, -0.6, 0.25), S(-0.9, -0.66, 0.26), S(-1.15, -0.78, 0.26), S(-1.4, -0.92, 0.25)] },
+    // Right: up into the middle, a loop, then out to the right edge.
+    { sx: 1, pts: [new THREE.Vector3(0.005, -0.046, -0.218), S(0.03, -1.3, 0.16), S(0.0, -0.9, 0.2),
+      ...loop(0.12, -0.56, 0.2, 0.17, 0.21, 0.26, Math.PI * 1.1, 0.92, 9),
+      S(0.36, -0.72, 0.24), S(0.66, -0.78, 0.25), S(0.98, -0.83, 0.25), S(1.35, -0.92, 0.24)] },
+  ];
+  const wires = [];
+  for (const { sx, pts } of leads) {
+    const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
+    const steps = 360, geo = new THREE.TubeGeometry(curve, steps, 0.0014, 6);
+    const n = geo.attributes.position.count, bend = new Float32Array(n);
+    for (let v = 0; v < n; v++) bend[v] = sx * Math.floor(v / 7) / steps;
+    geo.setAttribute('aBend', new THREE.BufferAttribute(bend, 1));
+    add(geo, wireMat, 0, 0, 0).castShadow = false;
+    // Dynamics: offset u of the far end (drone frame) under inertial load; ~4 Hz, lightly damped.
+    const tip = curve.getPointAt(0.7), axis = curve.getTangentAt(0.7);
+    wires.push({ sx, axis, r: tip, u: new THREE.Vector3(), v: new THREE.Vector3(), w: 2 * Math.PI * (sx < 0 ? 3.7 : 4.3), uni: sx < 0 ? bendU.uTipL : bendU.uTipR });
+  }
   scene.add(group);
+
+  // Wire dynamics. The far part of each lead feels the drone's specific force (acceleration minus
+  // gravity) plus the rotation terms at its lever arm; the steady hover sag is already in the shape.
+  const vel = new THREE.Vector3(), prevVel = new THREE.Vector3(), ang = new THREE.Vector3(), prevAng = new THREE.Vector3();
+  const acc = new THREE.Vector3(), alpha = new THREE.Vector3(), qInv = new THREE.Quaternion();
+  const load = new THREE.Vector3(), t1 = new THREE.Vector3(), t2 = new THREE.Vector3();
+  let primed = false;
+  function shakeWhiskers(d, dt) {
+    if (!(dt > 0)) return;
+    const h = Math.min(dt, 0.05);
+    vel.fromArray(d.velocity ?? [0, 0, 0]); ang.fromArray(d.angularVelocity ?? [0, 0, 0]);
+    if (!primed) { prevVel.copy(vel); prevAng.copy(ang); primed = true; }
+    acc.subVectors(vel, prevVel).divideScalar(h); alpha.subVectors(ang, prevAng).divideScalar(h);
+    prevVel.copy(vel); prevAng.copy(ang);
+    qInv.copy(group.quaternion).invert();
+    acc.y += 9.81;                                  // specific force, world
+    acc.applyQuaternion(qInv); ang.applyQuaternion(qInv); alpha.applyQuaternion(qInv);
+    acc.y -= 9.81;                                  // minus the level-hover load baked into the shape
+    const buzz = d.crashed ? 0 : (d.motors[0] + d.motors[1] + d.motors[2] + d.motors[3]) / 4;
+    for (const s of wires) {
+      load.copy(acc).add(t1.crossVectors(alpha, s.r)).add(t1.crossVectors(ang, t2.crossVectors(ang, s.r)));
+      load.addScaledVector(s.axis, -load.dot(s.axis)).clampLength(0, 45);
+      const n = 4, hs = h / n, k = s.w * s.w, c = 2 * 0.05 * s.w;
+      for (let i = 0; i < n; i++) {
+        s.v.x += (-load.x - k * s.u.x - c * s.v.x + (Math.random() - 0.5) * 12 * buzz) * hs;
+        s.v.y += (-load.y - k * s.u.y - c * s.v.y + (Math.random() - 0.5) * 12 * buzz) * hs;
+        s.v.z += (-load.z - k * s.u.z - c * s.v.z + (Math.random() - 0.5) * 12 * buzz) * hs;
+        s.v.addScaledVector(s.axis, -s.v.dot(s.axis));
+        s.u.addScaledVector(s.v, hs);
+      }
+      s.u.clampLength(0, 0.045);
+      // Motor vibration on top: a fine high-frequency shimmer.
+      s.uni.value.copy(s.u).add(t1.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(0.0008 * buzz));
+    }
+  }
 
   return {
     group,
-    update(d, tiltDeg, view, dt) {
+    update(d, tiltDeg, fpv, dt) {
       group.position.fromArray(d.position);
       group.quaternion.fromArray(d.quaternion);
       cam.rotation.x = THREE.MathUtils.degToRad(tiltDeg);
-      cam.visible = view !== 'fpv'; // it would sit inside the lens
+      cam.visible = !fpv; // it would sit inside the lens
       let maxBlur = 0;
       for (let i = 0; i < 4; i++) {
         const p = props[i], rpm = d.crashed ? 0 : d.motors[i];
@@ -124,6 +220,7 @@ export function createDrone({ scene }) {
         maxBlur = Math.max(maxBlur, blur);
       }
       propMat.opacity = 1 - maxBlur * 0.8;
+      shakeWhiskers(d, dt);
     },
     dispose() { scene.remove(group); disposables.forEach((x) => x.dispose()); },
   };

@@ -1,5 +1,6 @@
 // Boot + game loop. Shared file: see ARCHITECTURE.md › Game loop.
-import { createTestLevel } from './sim/level.js';
+import { LEVELS, createLevel } from './sim/demoLevels.js';
+import { pickMap } from './mapPicker.js';
 import { createSim, SIM_HZ } from './sim/index.js';
 import { createInput } from './input/index.js';
 import { createVisuals as createRealVisuals } from './visuals/index.js';
@@ -8,7 +9,9 @@ import { createDebugVisuals } from './debug/debugVisuals.js';
 const canvas = document.getElementById('game');
 const uiRoot = document.getElementById('ui');
 
-const level = createTestLevel();
+// ?map=<id> skips the picker (see LEVELS in src/sim/demoLevels.js).
+const mapId = new URLSearchParams(location.search).get('map') ?? await pickMap(uiRoot, LEVELS);
+const level = createLevel(mapId);
 const sim = await createSim({ level });
 const input = createInput(window);
 // ?debug forces the placeholder renderer.
