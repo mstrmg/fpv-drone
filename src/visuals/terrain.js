@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { mulberry32 } from './rng.js';
 import { canvasTexture } from './textures.js';
+import { lanes } from './propLayout.js';
 
 const FIELD_SPAN = 4096; // metres covered by the field maps
 
@@ -82,30 +83,10 @@ function buildLocalMap(level) {
     g.fillRect(X(x - r), X(z - r), r * 2 * k, r * 2 * k);
   };
 
-  const tracks = [];
+  // Lanes come from the shared prop layout, so the telegraph poles can follow them.
+  const tracks = (level.props ?? { lanes: lanes(level) }).lanes;
   const buildings = level.objects.filter((o) => o.kind === 'building');
   const trees = level.objects.filter((o) => o.kind === 'tree');
-  // Lanes follow the windbreaks, as they do between real fields.
-  tracks.push([[-half, -27], [half, -27]]);
-  tracks.push([[-108, -27], [-108, 330]]);
-  tracks.push([[272, -27], [272, 420]]);
-  tracks.push([[-440, -305], [440, -287]]);
-  if (buildings.length > 6) {
-    // Village streets between the rows of houses, joined to the lane network.
-    let cx = 0, cz = 0, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, n = 0;
-    for (const b of buildings) {
-      if (b.size[1] > 9) continue;
-      cx += b.position[0]; cz += b.position[2]; n++;
-      x0 = Math.min(x0, b.position[0]); x1 = Math.max(x1, b.position[0]);
-      z0 = Math.min(z0, b.position[2]); z1 = Math.max(z1, b.position[2]);
-    }
-    if (n) {
-      for (const z of [-235, -205]) tracks.push([[x0 - 22, z], [x1 + 14, z]]);
-      tracks.push([[x0 - 22, z0 - 14], [x0 - 22, -27]]);
-      tracks.push([[x0 - 22, -265], [x1 + 14, -265]]);
-      tracks.push([[x0 - 22, -175], [x1 + 14, -175]]);
-    }
-  }
 
   g.filter = 'blur(1.2px)';
   g.lineCap = 'round';
