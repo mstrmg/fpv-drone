@@ -6,6 +6,7 @@ import { createTerrain } from './terrain.js';
 import { createTrees } from './trees.js';
 import { createGrass } from './grass.js';
 import { createBuildings } from './buildings.js';
+import { createProps } from './props.js';
 import { createDrone } from './drone.js';
 import { createParticles } from './particles.js';
 import { createExplosions } from './explosions.js';
@@ -36,6 +37,7 @@ export function createVisuals({ canvas, uiRoot, level }) {
   const terrain = createTerrain({ scene, level, detailTex });
   const trees = createTrees({ scene, level });
   const buildings = createBuildings({ scene, level });
+  const props = createProps({ scene, level, terrain });
   const grass = createGrass({ scene, level, maps: terrain.maps, count: quality.grass });
   const drone = createDrone({ scene });
   const particles = createParticles({ scene, max: 1600 });
@@ -227,7 +229,7 @@ export function createVisuals({ canvas, uiRoot, level }) {
     dispose() {
       clearTimeout(helpTimer);
       overlay.remove();
-      for (const part of [env, terrain, trees, buildings, grass, drone, particles, fire, explosions, entities, feed, osd]) part.dispose();
+      for (const part of [env, terrain, trees, buildings, props, grass, drone, particles, fire, explosions, entities, feed, osd]) part.dispose();
       detailTex.dispose();
       renderer.dispose();
       if (window.__fpvVisuals === debug) delete window.__fpvVisuals;
