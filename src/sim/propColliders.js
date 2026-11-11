@@ -53,6 +53,19 @@ export function addPropColliders(world, body, level, surfaces) {
     put(RAPIER.ColliderDesc.cuboid(0.31, 0.1, 0.15), [s.x, s.y, s.z], _q.clone(), 'sandbag');
   }
 
+  // Dugouts: log walls banked with earth and a log-and-earth roof over the front part.
+  for (const d of pr.dugouts ?? []) {
+    const q = yawQ(d.yaw), cos = Math.cos(d.yaw), sin = Math.sin(d.yaw);
+    for (const b of dugoutBoxes(d)) {
+      const [lx, ly, lz] = b.c;
+      put(RAPIER.ColliderDesc.cuboid(...b.half), [d.x + lx * cos + lz * sin, d.y + ly, d.z - lx * sin + lz * cos], q, 'dugout');
+    }
+  }
+  // Antenna masts: the pole only (guy lines are too thin to matter).
+  for (const m of pr.masts ?? []) {
+    put(RAPIER.ColliderDesc.cylinder(m.height / 2, 0.07), [m.x, m.y + m.height / 2, m.z], _q.identity(), 'mast');
+  }
+
   // Crater rims: a ring of low boxes at 0.85 r, about 0.3 m tall.
   const SEG = 8;
   for (const c of pr.craters ?? []) {
@@ -136,4 +149,26 @@ export class WireField {
     }
     return false;
   }
+}
+
+// Solid parts of a dugout in its local frame (floor centre at the origin, front wall towards −Z,
+// entrance gap in the rear wall). Shared with the visuals so the logs sit where the colliders are.
+export const DUGOUT_WALL = 0.8;      // wall + earth bank thickness
+export const DUGOUT_DOOR = [0.15, 1.05]; // entrance gap in the rear wall, local x
+export const DUGOUT_OPEN_REAR = 1.3; // the rear strip with no roof, only the net
+export function dugoutBoxes(d) {
+  const t = DUGOUT_WALL, hw = d.w / 2, hd = d.d / 2;
+  const h = d.collapsed ? d.h * 0.55 : d.h;
+  const out = [
+    { c: [0, h / 2, -hd - t / 2], half: [hw + t, h / 2, t / 2] },
+    { c: [-hw - t / 2, h / 2, 0], half: [t / 2, h / 2, hd] },
+    { c: [hw + t / 2, h / 2, 0], half: [t / 2, h / 2, hd] },
+  ];
+  const [g0, g1] = DUGOUT_DOOR;
+  const l0 = -hw - t, r1 = hw + t;
+  out.push({ c: [(l0 + g0) / 2, h / 2, hd + t / 2], half: [(g0 - l0) / 2, h / 2, t / 2] });
+  out.push({ c: [(g1 + r1) / 2, h / 2, hd + t / 2], half: [(r1 - g1) / 2, h / 2, t / 2] });
+  const z0 = -hd - t, z1 = hd - DUGOUT_OPEN_REAR;
+  out.push({ c: [0, h + 0.22, (z0 + z1) / 2], half: [hw + t, 0.22, (z1 - z0) / 2] });
+  return out;
 }

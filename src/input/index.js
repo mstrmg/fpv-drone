@@ -17,7 +17,13 @@ export const KEY_BINDINGS = {
   pause: ['KeyP', 'Escape'],
   fire: ['KeyF'],
   resetTargets: ['KeyT'],
+  interact: ['KeyE'],          // on foot: put the goggles on
+  goggles: ['KeyE', 'KeyG'],   // flying: take them off again (campaign)
 };
+
+// On foot (campaign start): WASD walk, mouse (click to capture) or arrows look, Shift run.
+export const FOOT_KEYS = { forward: ['KeyW'], back: ['KeyS'], left: ['KeyA'], right: ['KeyD'],
+  lookLeft: ['ArrowLeft'], lookRight: ['ArrowRight'], lookUp: ['ArrowUp'], lookDown: ['ArrowDown'] };
 
 // Standard Gamepad mapping indices (DualSense in Chrome/Firefox/Edge).
 export const PAD = {
@@ -34,10 +40,13 @@ export const DEFAULT_INPUT_SETTINGS = {
   // 'stick': Mode 2 left stick on a self-centring pad: centre = 0%, full up = 100%,
   //          below centre stays 0%. 'r2': R2 trigger is throttle.
   padThrottle: 'stick',
+  mouseSensitivity: 0.0022, // rad per pixel
+  padLookRate: 2.6,         // rad/s at full right stick
+  keyLookRate: 1.8,         // rad/s with the arrow keys
 };
 
-const EDGE_ACTIONS = ['arm', 'reset', 'toggleMode', 'pause', 'fire', 'resetTargets'];
-const PAD_EDGES = { arm: ['l1', 'l2'], reset: ['options', 'triangle'], toggleMode: ['square'], pause: ['create'], fire: ['r2', 'cross'] };
+const EDGE_ACTIONS = ['arm', 'reset', 'toggleMode', 'pause', 'fire', 'resetTargets', 'interact', 'goggles'];
+const PAD_EDGES = { arm: ['l1', 'l2'], reset: ['options', 'triangle'], toggleMode: ['square'], pause: ['create'], fire: ['r2', 'cross'], interact: ['cross'], goggles: ['circle'] };
 
 export function createInput(target = window, settings = {}) {
   const s = { ...DEFAULT_INPUT_SETTINGS, ...settings };
@@ -48,12 +57,20 @@ export function createInput(target = window, settings = {}) {
   let source = 'keyboard';
   let lastPadThrottle = null;
 
-  const controls = { throttle: 0, yaw: 0, pitch: 0, roll: 0, source: 'keyboard' };
+  const controls = { throttle: 0, yaw: 0, pitch: 0, roll: 0, source: 'keyboard', moveX: 0, moveZ: 0, lookX: 0, lookY: 0, sprint: false };
+  let mode = 'drone'; // main.js keeps this in step with the sim (foot | drone)
+  let mouseX = 0, mouseY = 0;
+  const onMouse = (e) => {
+    if (typeof document === 'undefined' || !document.pointerLockElement) return;
+    mouseX += e.movementX || 0; mouseY += e.movementY || 0;
+  };
+  target.addEventListener('mousemove', onMouse);
   for (const a of EDGE_ACTIONS) controls[a] = false;
 
   const onDown = (e) => {
     if (e.repeat) return;
     if (Object.values(KEY_BINDINGS).some((codes) => codes.includes(e.code))) e.preventDefault();
+    if (e.code.startsWith('Arrow')) e.preventDefault();
     down.add(e.code);
     pressed.add(e.code);
     source = 'keyboard';
@@ -88,15 +105,31 @@ export function createInput(target = window, settings = {}) {
   }
 
   function poll(dt) {
+    const foot = mode === 'foot';
 
     // --- Keyboard
     const boost = down.has('ShiftLeft') || down.has('ShiftRight') ? 1 / s.keyStickMax : 1;
     const max = s.keyStickMax * boost;
     const axis = (neg, pos) => (held(pos) ? 1 : 0) - (held(neg) ? 1 : 0);
-    kb.pitch = approach(kb.pitch, axis('pitchBack', 'pitchForward') * max, s.keyStickRate, dt);
-    kb.roll = approach(kb.roll, axis('rollLeft', 'rollRight') * max, s.keyStickRate, dt);
-    kb.yaw = approach(kb.yaw, axis('yawLeft', 'yawRight') * max, s.keyStickRate, dt);
-    kb.throttle = Math.min(1, Math.max(0, kb.throttle + axis('throttleDown', 'throttleUp') * s.keyThrottleRate * dt));
+    const fk = (a) => FOOT_KEYS[a].some((c) => down.has(c));
+    const fa = (neg, pos) => (fk(pos) ? 1 : 0) - (fk(neg) ? 1 : 0);
+    if (foot) {
+      // Walking: the drone sticks rest at zero so nothing is stale when the goggles go on.
+      kb.pitch = kb.roll = kb.yaw = kb.throttle = 0;
+      controls.moveX = fa('left', 'right');
+      controls.moveZ = fa('back', 'forward');
+      controls.lookX = mouseX * s.mouseSensitivity + fa('lookLeft', 'lookRight') * s.keyLookRate * dt;
+      controls.lookY = mouseY * s.mouseSensitivity - fa('lookDown', 'lookUp') * s.keyLookRate * dt;
+      controls.sprint = down.has('ShiftLeft') || down.has('ShiftRight');
+    } else {
+      controls.moveX = controls.moveZ = controls.lookX = controls.lookY = 0;
+      controls.sprint = false;
+    }
+    mouseX = mouseY = 0;
+    kb.pitch = approach(kb.pitch, foot ? 0 : axis('pitchBack', 'pitchForward') * max, s.keyStickRate, dt);
+    kb.roll = approach(kb.roll, foot ? 0 : axis('rollLeft', 'rollRight') * max, s.keyStickRate, dt);
+    kb.yaw = approach(kb.yaw, foot ? 0 : axis('yawLeft', 'yawRight') * max, s.keyStickRate, dt);
+    kb.throttle = foot ? 0 : Math.min(1, Math.max(0, kb.throttle + axis('throttleDown', 'throttleUp') * s.keyThrottleRate * dt));
     if (held('throttleCut')) kb.throttle = 0;
     for (const a of EDGE_ACTIONS) if (tapped(a)) controls[a] = true;
     pressed.clear();
@@ -126,6 +159,16 @@ export function createInput(target = window, settings = {}) {
           padPrev.set(n, now);
         }
       }
+      if (foot) {
+        // Left stick walks, right stick looks, L3 (or R1) runs.
+        const mx = ax(PAD.axes.lx), mz = -ax(PAD.axes.ly), lx = ax(PAD.axes.rx), ly = ax(PAD.axes.ry);
+        if (Math.abs(mx) + Math.abs(mz) + Math.abs(lx) + Math.abs(ly) > 0.1) source = 'gamepad';
+        controls.moveX = Math.max(-1, Math.min(1, controls.moveX + mx));
+        controls.moveZ = Math.max(-1, Math.min(1, controls.moveZ + mz));
+        controls.lookX += lx * Math.abs(lx) * s.padLookRate * dt;
+        controls.lookY += ly * Math.abs(ly) * s.padLookRate * dt;
+        controls.sprint ||= btn('l3') || btn('r1');
+      }
       if (source === 'gamepad') {
         padActive = true;
         controls.throttle = throttle;
@@ -142,6 +185,7 @@ export function createInput(target = window, settings = {}) {
     } else {
       kb.throttle = 0; // so switching back to keyboard doesn't jump to a stale throttle
     }
+    if (foot) controls.throttle = controls.yaw = controls.pitch = controls.roll = 0;
     controls.source = padActive ? 'gamepad' : 'keyboard';
     controls.gamepadName = pad ? pad.id : null;
     return controls;
@@ -152,7 +196,9 @@ export function createInput(target = window, settings = {}) {
     settings: s,
     poll,
     consumeEdges,
+    setMode(m) { mode = m; },
     dispose() {
+      target.removeEventListener('mousemove', onMouse);
       target.removeEventListener('keydown', onDown);
       target.removeEventListener('keyup', onUp);
       target.removeEventListener('blur', onBlur);

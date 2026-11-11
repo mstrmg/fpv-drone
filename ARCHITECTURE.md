@@ -82,7 +82,18 @@ Level = {
     fences:   [{ a:[x,y,z], b:[x,y,z], lean, height }], // one panel between posts, 0.1 m thick
     bales:    [{ x, y, z, yaw, radius, length, wrapped }], // round bale, horizontal axis along local X
     sandbags: [{ x, y, z, yaw, roll, layer }],          // single bags ≈ 0.62 x 0.2 x 0.3 m
+    // Optional fortifications (campaign map):
+    trenches: [{ points: [[x, y, z], ...], width }],    // zig-zag fire / communication trench centre line; no collider (low spoil banks)
+    dugouts:  [{ x, y, z, yaw, w, d, h, net, collapsed, player? }], // log-and-earth dugout, front wall faces yaw (0 = −Z),
+                                                        // entrance in the rear wall. Solid parts: dugoutBoxes() in src/sim/propColliders.js
+    masts:    [{ x, y, z, height }],                    // telescopic antenna mast (pole collider)
   },
+
+  // Optional, campaign only:
+  start?: { mode: 'foot', position: [x,y,z] /* feet */, yaw },  // begin on foot instead of in the drone
+  home?: dugout,            // the dugout the player starts in (same object as in props.dugouts, player: true)
+  linkOrigin?: [x,y,z],     // the video link is measured from here (mast top) instead of the launch spot
+  linkRangeM?: number,      // default 800
 }
 
 Everything in `props` except wires has a static collider (an explosion on one reports `surface: 'prop'`).
@@ -97,6 +108,9 @@ normal impact rules.
 SimState = {
   time: number,              // sim seconds since level start
   paused: boolean,
+  mode: 'foot' | 'drone',    // 'foot' only on levels with `start`: the camera is the soldier's eyes (no feed, no OSD)
+  player: null | { position:[x,y,z] /* feet */, yaw, pitch, speed, nearGoggles },
+  prompt: null | 'goggles' | 'ungoggle',   // what the interact key would do now
   // There is no chase / third-person view: the game is FPV only.
 
   drone: {
@@ -242,6 +256,7 @@ Every event has `{ type, time }` plus:
 | `targets_reset`    | –            | all enemies respawned at their start (ids unchanged): clear wrecks, fires and corpses |
 | `entity_alerted`   | `entityId, position` | a unit noticed the drone (visuals may play a shout / turn head); optional to use |
 | `link_lost` / `link_restored` | – | signal fell below 0.08 / recovered (not sent for the detonation cut, see `drone_lost`) |
+| `mode`             | `mode: 'foot' \| 'drone'` | goggles on / off (campaign). After a detonation the next drone is put by the mast and you are back on foot |
 
 `explosion` fields:
 
@@ -278,6 +293,8 @@ when `surface === 'ground'`, a scorch decal on buildings, fragment sparks out to
 Controls = {
   throttle: 0..1, yaw: -1..1, pitch: -1..1, roll: -1..1, // pitch +1 = stick forward (nose down), roll +1 = right, yaw +1 = right
   arm, reset, toggleMode, pause, fire, resetTargets,        // edge-triggered booleans (true for one poll); fire = detonate
+  interact, goggles,                                        // on foot: either puts the goggles on (at the table); flying: goggles takes them off
+  moveX, moveZ: -1..1, lookX, lookY: radians this poll, sprint: boolean,   // on foot (moveZ +1 = forward, lookX + = turn right)
 }
 ```
 

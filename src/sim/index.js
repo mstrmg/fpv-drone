@@ -6,6 +6,7 @@ import { FlightModel } from './flightModel.js';
 import { Wind } from './environment.js';
 import { createEntities } from './entities.js';
 import { addPropColliders, WireField } from './propColliders.js';
+import { createWalker } from './onFoot.js';
 import { WARHEADS, ARM_DISTANCE_M, FUZE_IMPACT_SPEED, JET_REACH_M, blastAt, DamageRegistry } from './warhead.js';
 
 export const SIM_HZ = 240;
@@ -110,9 +111,14 @@ export async function createSim({ level, settings = {} }) {
   );
 
   const events = [];
+  // Levels with a `start` begin on foot (campaign); the others go straight to the drone.
+  const walker = level.start ? createWalker(world, level) : null;
   const state = {
     time: 0,
     paused: false,
+    mode: walker ? 'foot' : 'drone',
+    player: walker ? walker.state : null,
+    prompt: null,
     drone: {
       position: [0, 0, 0], quaternion: [0, 0, 0, 1], velocity: [0, 0, 0], angularVelocity: [0, 0, 0],
       motors: [0, 0, 0, 0], throttle: 0, armed: false, crashed: false, destroyed: false, flightMode: 'ACRO',
@@ -149,6 +155,8 @@ export async function createSim({ level, settings = {} }) {
   let safeWarnUntil = -1;
   let respawnAt = -1;
   const launchPoint = new Vector3();
+  const linkOrigin = new Vector3();
+  const NEUTRAL = { throttle: 0, yaw: 0, pitch: 0, roll: 0 };
   const emit = (e) => events.push({ time: state.time, ...e });
 
   function respawn() {
@@ -172,6 +180,7 @@ export async function createSim({ level, settings = {} }) {
     signalLost = false;
     respawnAt = -1;
     launchPoint.set(position[0], position[1], position[2]);
+    if (level.linkOrigin) linkOrigin.fromArray(level.linkOrigin); else linkOrigin.copy(launchPoint);
     flightTime = 0;
     upsideDownTime = 0;
     writeState();
@@ -291,7 +300,7 @@ export async function createSim({ level, settings = {} }) {
   // Analog video link: weakens with distance from the launch point, flying low
   // (the ground blocks the signal) and hills between you and the launch point.
   // `roll` drives the picture rolling vertically as sync starts to fail.
-  const LINK_RANGE_M = 800;
+  const LINK_RANGE_M = level.linkRangeM ?? 800;
   let linkTick = 0;
   let occlusion = 1;
   let signalLost = false;
@@ -300,15 +309,15 @@ export async function createSim({ level, settings = {} }) {
     if (state.drone.destroyed) return;
     const p = body.translation();
     const T = level.terrain;
-    const dist = launchPoint.distanceTo(_to.set(p.x, p.y, p.z));
+    const dist = linkOrigin.distanceTo(_to.set(p.x, p.y, p.z));
     const agl = Math.max(0, p.y - T.heightAt(p.x, p.z));
     if ((linkTick++ & 7) === 0) { // terrain between us and the launch point, sampled a few times a second
       let blocked = 0;
       const N = 12;
       for (let i = 1; i < N; i++) {
         const t = i / N;
-        const x = launchPoint.x + (p.x - launchPoint.x) * t, z = launchPoint.z + (p.z - launchPoint.z) * t;
-        const y = launchPoint.y + 1 + (p.y - launchPoint.y - 1) * t;
+        const x = linkOrigin.x + (p.x - linkOrigin.x) * t, z = linkOrigin.z + (p.z - linkOrigin.z) * t;
+        const y = linkOrigin.y + 1 + (p.y - linkOrigin.y - 1) * t;
         blocked = Math.max(blocked, T.heightAt(x, z) - y);
       }
       occlusion = blocked > 0 ? Math.max(0.25, 1 - blocked / 15) : 1;
@@ -332,8 +341,23 @@ export async function createSim({ level, settings = {} }) {
     if (fm.armed && flown >= ARM_DISTANCE_M) wh.state = 'armed';
   }
 
+  function setMode(mode) {
+    if (state.mode === mode) return;
+    state.mode = mode;
+    if (mode === 'drone' && (state.drone.crashed || state.drone.destroyed)) { respawn(); emit({ type: 'reset' }); }
+    if (mode === 'foot') setArmed(false);
+    emit({ type: 'mode', mode });
+  }
+
   function handleEdges(c) {
     if (c.pause) state.paused = !state.paused;
+    if (state.paused) return;
+    if (state.mode === 'foot') {
+      if ((c.interact || c.goggles) && walker.state.nearGoggles) setMode('drone');
+      if (c.resetTargets) { entities.reset(); emit({ type: 'targets_reset' }); }
+      return;
+    }
+    if (walker && c.goggles) { setMode('foot'); return; }
     if (c.fire && !state.paused) {
       if (state.drone.warhead.state === 'armed') detonate('manual');
       else if (!state.drone.destroyed && warhead.type !== 'none') safeWarnUntil = state.time + 2;
@@ -354,9 +378,15 @@ export async function createSim({ level, settings = {} }) {
   const accel = new Vector3();
   const gq = new Quaternion();
 
-  function step(dt, controls) {
-    handleEdges(controls);
+  function step(dt, input) {
+    handleEdges(input);
     if (state.paused) return;
+    // On foot the drone sits where it is with the sticks centred.
+    const controls = state.mode === 'foot' ? NEUTRAL : input;
+    if (walker) {
+      if (state.mode === 'foot') walker.update(dt, input, (col) => col.handle === droneCollider.handle);
+      state.prompt = state.mode === 'foot' && walker.state.nearGoggles ? 'goggles' : state.mode === 'drone' ? 'ungoggle' : null;
+    }
 
     const dr = state.drone;
     entityDrone.position = dr.position;
@@ -366,7 +396,11 @@ export async function createSim({ level, settings = {} }) {
 
     if (state.drone.destroyed) {
       state.time += dt;
-      if (respawnAt >= 0 && state.time >= respawnAt) { respawn(); emit({ type: 'reset' }); }
+      if (respawnAt >= 0 && state.time >= respawnAt) {
+        respawn(); emit({ type: 'reset' });
+        if (walker) setMode('foot'); // goggles off: the next drone is waiting by the mast
+      }
+      if (walker) world.step(); // the walker still moves
       writeState(controls);
       return;
     }
@@ -457,8 +491,10 @@ export async function createSim({ level, settings = {} }) {
     d.armed = fm.armed;
     d.flightMode = fm.mode;
 
-    // FPV camera: front of the frame, tilted up.
+    // FPV camera: front of the frame, tilted up. On foot: the soldier's eyes.
     _q.set(r.x, r.y, r.z, r.w);
+    if (state.mode === 'foot') walker.writeCamera(state.camera, 72);
+    else {
     _camOffset.set(0, 0.03, -0.09).applyQuaternion(_q);
     const cam = state.camera;
     cam.position[0] = p.x + _camOffset.x; cam.position[1] = p.y + _camOffset.y; cam.position[2] = p.z + _camOffset.z;
@@ -467,6 +503,7 @@ export async function createSim({ level, settings = {} }) {
     cam.quaternion[0] = _q.x; cam.quaternion[1] = _q.y; cam.quaternion[2] = _q.z; cam.quaternion[3] = _q.w;
     cam.fovDeg = opts.fovDeg;
     cam.tiltDeg = opts.cameraTiltDeg;
+    }
 
     const h = state.hud;
     h.armed = fm.armed;
