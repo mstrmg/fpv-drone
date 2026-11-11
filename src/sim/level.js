@@ -1,6 +1,8 @@
 // Static level data shared by the sim (colliders) and visuals (meshes).
 // See ARCHITECTURE.md › Level.
 
+import { propLayout } from './propLayout.js';
+
 function mulberry32(seed) {
   let a = seed >>> 0;
   return () => {
@@ -123,11 +125,41 @@ export function createTestLevel(seed = 7) {
     objects.push({ id: `t${id++}`, kind: 'tree', position: place(x, z), height: 6 + rand() * 10, radius: 2 + rand() * 2.5 });
   }
 
-  return {
+  // Enemies (sim-only; visuals reads them from state.entities). Positions are [x, z].
+  const enemies = [];
+  const at = (kind, variant, x, z, extra = {}) => enemies.push({ kind, variant, position: [x, z], ...extra });
+  // Easy first targets, 80 m north of the spawn.
+  const loopA = [[-10, -80], [15, -95], [-5, -110]];
+  ['rifleman', 'rifleman', 'rpg'].forEach((v, i) => at('infantry', v, -10 + i * 3, -80 - i * 2, { patrol: loopA, yaw: 2.5, idleTime: 3 }));
+  // Squad on patrol west of the tall buildings, led by an officer.
+  const loopB = [[-80, -105], [-58, -120], [-80, -135], [-100, -120]];
+  ['officer', 'rifleman', 'rifleman', 'mg'].forEach((v, i) => at('infantry', v, -80 - i * 2, -105 - i, { patrol: loopB, idleTime: 3 }));
+  // Convoy driving loops on the road to the north: jeep, truck, BTR.
+  at('light', 'uaz', -200, -190, { patrol: [[-200, -190], [40, -190], [40, -215], [-200, -215]], yaw: -Math.PI / 2 });
+  at('truck', 'ural', -180, -190, { patrol: [[-180, -190], [40, -190], [40, -215], [-180, -215]], yaw: -Math.PI / 2 });
+  at('apc', 'btr', -170, -240, { patrol: [[-170, -240], [30, -240], [30, -262], [-170, -262]], yaw: -Math.PI / 2 });
+  // A technical on a short beat, a parked fuel tanker, and a BMP and MT-LB further out.
+  at('light', 'technical', 60, -150, { patrol: [[60, -150], [110, -150]], yaw: -Math.PI / 2 });
+  at('truck', 'fuel', 150, -175, {});
+  at('apc', 'bmp', 90, -230, { patrol: [[90, -230], [150, -230]], yaw: -Math.PI / 2 });
+  at('apc', 'mtlb', -60, -290, { patrol: [[-60, -290], [0, -290]], yaw: -Math.PI / 2 });
+  at('light', 'pickup', -120, -260, { patrol: [[-120, -260], [-120, -300]], yaw: 0 });
+  at('truck', 'kamaz', -90, -330, {});
+  // Dug-in tanks: a T-80 with its squad, a T-72 to the west and a T-90 far east.
+  at('tank', 't80', 120, -90, { yaw: Math.PI / 2 });
+  ['rifleman', 'rifleman', 'rifleman', 'mg', 'rpg', 'rifleman'].forEach((v, i) =>
+    at('infantry', v, 108 + (i % 3) * 3, -86 - Math.floor(i / 3) * 4 - 6, {}));
+  at('tank', 't72', -150, -70, { yaw: 0 });
+  at('tank', 't90', 300, -130, { yaw: Math.PI / 2 });
+
+  const level = {
     name: 'Test range',
     seed,
     terrain,
     objects,
+    enemies,
     spawn: { position: [0, terrain.heightAt(0, 0) + 0.1, 0], yaw: 0 },
   };
+  level.props = propLayout(level); // scenery shared with the visuals: colliders here, meshes there
+  return level;
 }

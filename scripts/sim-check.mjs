@@ -2,6 +2,7 @@
 import { createTestLevel } from '../src/sim/level.js';
 import { createSim, SIM_HZ } from '../src/sim/index.js';
 import { Quaternion, Vector3 } from 'three';
+import { WARHEADS, blastAt } from '../src/sim/warhead.js';
 
 const level = createTestLevel();
 const dt = 1 / SIM_HZ;
@@ -213,6 +214,207 @@ const collect = (sim, into) => { for (const e of sim.drainEvents()) into.push(e)
   sim.detonate();
   check('building blocks fragments', got.cover && got.cover.fragments === 0 && !got.cover.lineOfSight, got.cover ? `blast ${got.cover.blast.toFixed(3)} frags ${got.cover.fragments}` : 'not hit');
   check('open target at same range takes fragments', got.open && got.open.fragments > 0, got.open ? `frags ${got.open.fragments.toFixed(3)}` : 'not hit');
+}
+
+// ---------------- Enemies ----------------
+const kindOf = (sim, kind, n = 0) => sim.state.entities.filter((e) => e.kind === kind)[n];
+async function boom(warhead, target, offset) {
+  const { sim } = await fresh({ warhead, wind: false });
+  const e = kindOf(sim, target);
+  const [fx, fz] = [-Math.sin(Math.atan2(-e.velocity[0] || 0, 0)), 0]; void fx; void fz;
+  sim._body.setTranslation({ x: e.position[0] + offset[0], y: e.position[1] + offset[1], z: e.position[2] + offset[2] }, true);
+  sim.state.drone.warhead.state = 'armed';
+  sim.detonate();
+  const ev = sim.drainEvents();
+  return { sim, e, ev };
+}
+
+// Helpers for placing hits in a vehicle's own frame (x right, y up, −z forward).
+const yawOf = (e) => 2 * Math.atan2(e.quaternion[1], e.quaternion[3]);
+const toWorld = (e, l) => { const y = yawOf(e), c = Math.cos(y), s = Math.sin(y); return [e.position[0] + l[0] * c + l[2] * s, e.position[1] + l[1], e.position[2] - l[0] * s + l[2] * c]; };
+async function strike(warhead, variant, local, vel = [0, -10, 0]) {
+  const { sim } = await fresh({ warhead, wind: false });
+  const e = sim.state.entities.find((x) => x.variant === variant);
+  const p = toWorld(e, local);
+  sim._body.setTranslation({ x: p[0], y: p[1], z: p[2] }, true);
+  sim._body.setLinvel({ x: vel[0], y: vel[1], z: vel[2] }, true); // a top attack dives onto the target
+  sim.state.drone.warhead.state = 'armed';
+  sim.detonate();
+  return { sim, e, ev: sim.drainEvents() };
+}
+// Same, straight into a target without the drone: quick to repeat on one sim.
+function direct(sim, e, w, local, dir) {
+  const t = sim.damage.targets.get(e.id);
+  const y = yawOf(e), c = Math.cos(y), s = Math.sin(y);
+  const pos = toWorld(e, local), d = [dir[0] * c + dir[2] * s, dir[1], -dir[0] * s + dir[2] * c];
+  const dist = t.distanceFrom(pos);
+  const { blast, fragments } = blastAt(dist, w);
+  const r = t.applyDamage({ blast, fragments, jet: true, distance: dist, lineOfSight: true, shaped: w.shaped, penetrationMm: w.penetrationMm, direction: d, position: pos });
+  r.after?.();
+}
+const idle = { active: false, position: [0, 200, 0], speed: 0 };
+const age = (sim, secs) => { for (let i = 0; i < secs * SIM_HZ; i++) sim.entities.update(dt, idle); };
+
+// 14. Truck: a hit on the cab kills the driver without wrecking the truck; frag kills infantry but barely scratches a tank
+{
+  const r = await strike('rpg-heat', 'ural', [-0.6, 3.1, -2.45]);
+  const hit = r.ev.find((x) => x.type === 'hit' && x.entityId === r.e.id);
+  const driver = r.e.crew.find((c) => c.role === 'driver');
+  check('HEAT through the cab hurts the driver, truck stays a truck', hit?.source === 'jet' && hit.penetrated && driver.state !== 'ok' && r.e.status !== 'destroyed' && r.ev.some((x) => x.type === 'crew_hit'),
+    `driver ${driver.state}, status ${r.e.status}, kill ${r.e.kill}, component ${hit?.component}`);
+  const f = await boom('frag', 'infantry', [0, 1, 1.5]);
+  check('frag kills nearby infantry', f.e.status === 'destroyed' && f.e.condition === 'dead', `status ${f.e.status}, ${f.e.condition}`);
+  const t = await boom('frag', 'tank', [0, 3, 0]);
+  check('frag barely hurts a tank', t.e.status !== 'destroyed' && t.e.health > 0.8 && t.e.crewAlive >= 2, `health ${t.e.health.toFixed(2)}, crew ${t.e.crewAlive}/${t.e.crewTotal}`);
+}
+
+// 15. Tank armour: front hit bounces, top hit through the ammo cooks it off
+{
+  const front = await boom('rpg-heat', 'tank', [-3.9, 1.2, 0]);
+  const hit = front.ev.find((x) => x.type === 'hit' && x.entityId === front.e.id);
+  check('tank shrugs off a frontal HEAT hit', front.e.status !== 'destroyed' && hit?.source === 'jet' && hit.penetrated === false && front.e.crewAlive >= 2 && front.e.health > 0.7,
+    `penetrated ${hit?.penetrated}, health ${front.e.health.toFixed(2)}, crew ${front.e.crewAlive}`);
+  // Ammo hits usually cook off but not always (a dice roll): try a few times over the carousel.
+  const { sim } = await fresh({ warhead: 'none', wind: false });
+  const e = sim.state.entities.find((x) => x.variant === 't80');
+  let ev = [], tries = 0;
+  for (; tries < 5 && !ev.some((x) => x.type === 'explosion' && x.cause === 'cookoff'); tries++) {
+    sim.entities.reset(); sim.drainEvents();
+    direct(sim, e, WARHEADS['rpg-heat'], [0, e.size[1] + 0.4, 0.05], [0, -1, 0]);
+    age(sim, 8);
+    ev = sim.drainEvents();
+  }
+  const cook = ev.find((x) => x.type === 'explosion' && x.cause === 'cookoff');
+  const infantryHurt = sim.state.entities.filter((x) => x.kind === 'infantry' && x.health < 1).length;
+  check('top hit through the ammo cooks the tank off', ev.some((x) => x.type === 'component_damaged' && x.component === 'ammo') && e.status === 'destroyed' && e.kill === 'catastrophic' && ev.some((x) => x.type === 'entity_destroyed' && x.cause === 'cookoff'),
+    `${e.status}/${e.kill}, ${tries} ${tries === 1 ? 'try' : 'tries'}`);
+  check('ammo cook-off hurts nearby troops', !!cook && cook.kind === 'ammo' && infantryHurt >= 2, `${cook ? cook.kind : 'no cook-off'}, ${infantryHurt} infantry hurt`);
+}
+
+// 15b. Outcomes vary: spread top-attack hits over a tank and count what happens to it
+{
+  const { sim } = await fresh({ warhead: 'none', wind: false });
+  const e = sim.state.entities.find((x) => x.variant === 't72');
+  const [W, , D] = e.size, w = WARHEADS['rpg-heat'];
+  const n0 = sim.state.entities.length;
+  let sawCrew = null, grown = false;
+  const seen = new Set(); let crewOnly = 0, mobilityOnly = 0, cooked = 0, untouched = 0, n = 0;
+  for (let i = 0; i < 6; i++) for (let j = 0; j < 5; j++) {
+    sim.entities.reset(); sim.drainEvents();
+    direct(sim, e, w, [(i / 5 - 0.5) * W * 0.85, e.size[1] + 0.4, (j / 4 - 0.5) * D * 0.85], [0, -1, 0]);
+    age(sim, 25);
+    n++;
+    const ev = sim.drainEvents();
+    if (e.status === 'destroyed') cooked++;
+    else if (e.crewAlive + e.crew.filter((c) => c.state === 'bailed').length < e.crewTotal && e.mobility === 'ok' && e.firepower === 'ok') crewOnly++;
+    else if (e.kill === 'mobility') mobilityOnly++;
+    else if (e.kill === 'none' && e.crew.every((c) => c.state === 'ok')) untouched++;
+    seen.add(e.kill);
+    grown ||= sim.state.entities.length > n0;
+    sawCrew ??= sim.state.entities.find((x) => x.variant === 'crew' && x.fromVehicle === e.id);
+    void ev;
+  }
+  sim.entities.reset(); sim.drainEvents();
+  check('top hits give varied outcomes (cook-off, immobilised, crew killed, untouched)', cooked >= 1 && mobilityOnly >= 1 && crewOnly >= 1 && untouched >= 1 && seen.size >= 3,
+    `${n} hits: ${cooked} cooked off, ${mobilityOnly} mobility kills, ${crewOnly} crew-only, ${untouched} untouched; kills seen: ${[...seen].join(', ')}`);
+  check('bailed-out crew appear as infantry entities, and reset removes them', !!sawCrew && sawCrew.locomotion === 'foot' && grown && sim.state.entities.length === n0,
+    sawCrew ? `${sawCrew.id} from ${sawCrew.fromVehicle}, ${n0} entities after reset` : 'no crewman ever bailed out');
+}
+
+// 15c. Infantry: graded wounds, wounded states, bleeding out
+{
+  const { sim } = await fresh({ warhead: 'none', wind: false });
+  const e = sim.state.entities.find((x) => x.variant === 'rifleman');
+  const w = WARHEADS.frag;
+  const conds = {}; let downId = null;
+  const byDist = {};
+  for (let d = 2; d <= 20; d += 1) for (let k = 0; k < 4; k++) {
+    sim.entities.reset(); sim.drainEvents();
+    direct(sim, e, w, [d * 0.7, 1.0, d * 0.7], [0, 0, 1]);
+    conds[e.condition] = (conds[e.condition] ?? 0) + 1;
+    (byDist[d] ??= []).push(e.health);
+  }
+  const mean = (d) => byDist[d].reduce((a, b) => a + b, 0) / byDist[d].length;
+  check('infantry wounds are graded: dead, down, crawling, wounded and unhurt all occur', ['dead', 'down', 'crawling', 'wounded', 'ok'].filter((c) => conds[c]).length >= 4 && mean(3) < mean(14),
+    `${Object.entries(conds).map(([k, v]) => `${k} ${v}`).join(', ')}; mean health at 3 m ${mean(3).toFixed(2)}, 14 m ${mean(14).toFixed(2)}`);
+  // Find a downed man and let him bleed.
+  let bled = false, sawStatus = new Set();
+  for (let d = 4; d < 14 && !bled; d += 0.5) for (let k = 0; k < 8 && !bled; k++) {
+    sim.entities.reset(); sim.drainEvents();
+    direct(sim, e, w, [d * 0.7, 1.0, d * 0.7], [0, 0, 1]);
+    if (e.condition !== 'down') continue;
+    sawStatus.add(e.status);
+    age(sim, 60);
+    const ev = sim.drainEvents();
+    bled = ev.some((x) => x.type === 'entity_destroyed' && x.entityId === e.id && x.cause === 'bleedout') && e.status === 'destroyed';
+  }
+  check('a downed soldier lies still and bleeds out', bled && sawStatus.has('down'), bled ? 'bled out' : 'never saw a down soldier bleed out');
+}
+
+// 16. Patrol, notice the drone, flee or hit the dirt
+{
+  const { sim, c } = await fresh({ warhead: 'rpg-heat' });
+  const t0 = kindOf(sim, 'truck').position.slice();
+  run(sim, c, 15);
+  const t1 = kindOf(sim, 'truck').position;
+  check('truck patrols', Math.hypot(t1[0] - t0[0], t1[2] - t0[2]) > 15, `${Math.hypot(t1[0] - t0[0], t1[2] - t0[2]).toFixed(0)} m in 15 s`);
+  const squad = sim.state.entities.filter((e) => e.kind === 'infantry').slice(7);
+  sim._body.setTranslation({ x: squad[0].position[0] + 12, y: squad[0].position[1] + 10, z: squad[0].position[2] + 12 }, true);
+  sim._body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+  c.throttle = globalThis.hoverLoaded; const ev = [];
+  run(sim, c, 4, () => collect(sim, ev));
+  const reacting = squad.filter((e) => e.status === 'fleeing' || e.status === 'prone').length;
+  check('infantry notice the drone and react', reacting >= 3 && ev.some((x) => x.type === 'entity_alerted'), `${reacting}/${squad.length} fleeing or prone`);
+}
+
+// 17. Video link: fine up high, rolls when low and far from the launch point
+{
+  const { sim, c } = await fresh({ warhead: 'none', wind: false });
+  const put = (x, z, agl) => { sim._body.setTranslation({ x, y: level.terrain.heightAt(x, z) + agl, z }, true); sim._body.setLinvel({ x: 0, y: 0, z: 0 }, true); };
+  c.throttle = 0.28;
+  put(0, -150, 40); run(sim, c, 1.5);
+  const high = { s: sim.state.link.signal, r: sim.state.link.roll };
+  put(0, -250, 1); c.throttle = 0.2; run(sim, c, 0.35);
+  const low = { s: sim.state.link.signal, r: sim.state.link.roll };
+  check('link strong when high, rolls when low and far', high.s > 0.8 && high.r === 0 && low.r > 0.1 && low.s < high.s, `high ${high.s.toFixed(2)}/roll ${high.r.toFixed(2)}; low ${low.s.toFixed(2)}/roll ${low.r.toFixed(2)}`);
+}
+
+// 18. Variants: T-90 reactive armour stops a jet that goes through a T-80's side; the fuel tanker burns hot
+{
+  const side = async (variant) => {
+    const r = await strike('rpg-heat', variant, [2.3, 1.2, 0.3], [-10, 0, 0]);
+    return r.ev.find((x) => x.type === 'hit' && x.entityId === r.e.id);
+  };
+  const h80 = await side('t80'), h90 = await side('t90');
+  check('T-90 side armour + ERA stops the jet that gets through a T-80', h80?.penetrated === true && h90?.penetrated === false, `t80 penetrated ${h80?.penetrated}, t90 penetrated ${h90?.penetrated}`);
+  const { sim, e: fuel, ev } = await strike('rpg-heat', 'fuel', [0, 3.3, 0.8]);
+  run(sim, blank(), 3, () => collect(sim, ev));
+  const boom2 = ev.find((x) => x.type === 'explosion' && x.cause === 'cookoff');
+  check('fuel tanker explodes big', fuel.status === 'destroyed' && boom2 && boom2.chargeKg >= 1, boom2 ? `${boom2.chargeKg} kg, radius ${boom2.radius}` : 'no explosion');
+}
+
+// 19. Props: shared layout, solid poles, crashable wires
+{
+  const pr = level.props;
+  check('props in level data', pr.poles.length > 50 && pr.wires.length > 100 && pr.fences.length > 300, `${pr.poles.length} poles, ${pr.wires.length} wires, ${pr.fences.length} fence panels, ${pr.bales.length} bales, ${pr.sandbags.length} sandbags, ${pr.craters.length} craters`);
+  const fly = async (pos, vel, secs = 0.4) => {
+    const { sim, c } = await fresh({ warhead: 'none', wind: false });
+    sim._body.setTranslation({ x: pos[0], y: pos[1], z: pos[2] }, true);
+    sim._body.setLinvel({ x: vel[0], y: vel[1], z: vel[2] }, true);
+    c.throttle = globalThis.hoverThrottle; const ev = [];
+    run(sim, c, secs, () => collect(sim, ev));
+    return ev.find((e) => e.type === 'crash');
+  };
+  const pole = pr.poles.find((q) => !q.snapped);
+  const hitPole = await fly([pole.x - 3, pole.y + 3.3, pole.z], [12, 0, 0]);
+  check('flying into a pole crashes', hitPole && !hitPole.cause, hitPole ? `impact ${hitPole.impactSpeed.toFixed(1)} m/s` : 'flew through');
+  const w = pr.wires[10];
+  const mid = [(w.a[0] + w.b[0]) / 2, (w.a[1] + w.b[1]) / 2 - w.sag, (w.a[2] + w.b[2]) / 2];
+  const dl = Math.hypot(w.b[0] - w.a[0], w.b[2] - w.a[2]), n = [-(w.b[2] - w.a[2]) / dl, (w.b[0] - w.a[0]) / dl];
+  const hitWire = await fly([mid[0] - n[0] * 1.5, mid[1], mid[2] - n[1] * 1.5], [n[0] * 8, 0, n[1] * 8]);
+  check('flying into a wire crashes it', hitWire?.cause === 'wire', hitWire ? `cause ${hitWire.cause ?? 'none'}` : 'flew through');
+  const under = await fly([mid[0] - n[0] * 1.5, mid[1] - 3, mid[2] - n[1] * 1.5], [n[0] * 8, 0, n[1] * 8]);
+  check('flying under the wires is fine', !under, under ? `crashed (${under.cause ?? 'impact'})` : 'clear');
 }
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed');

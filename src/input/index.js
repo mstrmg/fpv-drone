@@ -16,6 +16,7 @@ export const KEY_BINDINGS = {
   toggleMode: ['KeyM'],
   pause: ['KeyP', 'Escape'],
   fire: ['KeyF'],
+  resetTargets: ['KeyT'],
 };
 
 // Standard Gamepad mapping indices (DualSense in Chrome/Firefox/Edge).
@@ -35,7 +36,7 @@ export const DEFAULT_INPUT_SETTINGS = {
   padThrottle: 'stick',
 };
 
-const EDGE_ACTIONS = ['arm', 'reset', 'toggleMode', 'pause', 'fire'];
+const EDGE_ACTIONS = ['arm', 'reset', 'toggleMode', 'pause', 'fire', 'resetTargets'];
 const PAD_EDGES = { arm: ['l1', 'l2'], reset: ['options', 'triangle'], toggleMode: ['square'], pause: ['create'], fire: ['r2', 'cross'] };
 
 export function createInput(target = window, settings = {}) {

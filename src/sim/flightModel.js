@@ -13,7 +13,7 @@ export const DEFAULT_AIRFRAME = {
   payloadMass: 0,                  // kg, warhead added in M2
   inertia: [0.0085, 0.015, 0.0085],// kg·m² about body x, y, z
   armLength: 0.115,                // m, |x| and |z| of each motor (≈ 325 mm diagonal)
-  maxThrustPerMotor: 16.5,         // N at 4.2 V/cell, no sag (~1.7 kgf)
+  maxThrustPerMotor: 19.8,         // N at 4.2 V/cell, no sag (~2.0 kgf; +20% over the first tune)
   yawTorquePerThrust: 0.016,       // m, reaction torque / thrust
   motorTau: 0.035,                 // s, rotor spin-up time constant
   motorTauDown: 0.05,              // s, spin-down is slower (no active braking)
