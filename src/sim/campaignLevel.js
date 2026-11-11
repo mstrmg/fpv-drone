@@ -195,6 +195,28 @@ export function createCampaignLevel() {
   dugout(-650, 325, 0.3, { collapsed: true, net: false });
   dugout(250, 105, Math.PI, { collapsed: true });
 
+  // ---- Mission 1: a squad digging in along the shelled tree line at z ≈ 160 ----------------------
+
+  // Five men spread along the south edge of the trees. They work and walk about their stretch,
+  // and when a drone turns up they drop flat and shift position but stay put (hold: true).
+  {
+    const MZ = 168;
+    trench([[40, MZ + 2], [80, MZ - 1], [120, MZ + 1]], { zig: 2, bay: 7 });
+    m.sandbags(64, MZ + 3, Math.PI, 1.6, 1.2);
+    m.sandbags(112, MZ + 3, Math.PI, 1.6, 1.2);
+    for (const [x, z] of [[58, MZ - 6], [98, MZ - 7], [132, MZ - 5]]) m.tree(x, z, R(7, 10), R(1.8, 2.6));
+    const squadM1 = [
+      ['rifleman', [[45, MZ + 1], [70, MZ + 2], [62, MZ - 2]], 5],
+      ['mg', [[64, MZ + 4], [72, MZ + 5]], 9],
+      ['rifleman', [[85, MZ], [104, MZ - 2], [95, MZ + 3]], 4],
+      ['rpg', [[112, MZ + 4], [120, MZ + 1], [108, MZ - 1]], 7],
+      ['officer', [[78, MZ - 4], [118, MZ - 3]], 6],
+    ];
+    for (const [variant, patrol, idleTime] of squadM1) {
+      m.enemy('infantry', variant, patrol[0][0], patrol[0][1], { patrol, idleTime, yaw: Math.PI, hold: true, mission: 'treeline' });
+    }
+  }
+
   // ---- Enemy first line (z ≈ −125) ---------------------------------------------------------
 
   trenchLine(-1000, 900, -122, 7, [160, 360], [25, 70]);
@@ -277,6 +299,27 @@ export function createCampaignLevel() {
   m.bales(DX + 60, DZ + 40, 6, true);
   craterField(-1400, 1400, -1450, -200, 45);
 
+  // ---- Missions ---------------------------------------------------------------------------------
+
+  const missions = [{
+    id: 'treeline',
+    title: 'Treeline',
+    objective: 'Take out the squad digging in along the treeline north of us',
+    intro: [
+      { after: 3, say: 'Hey. Hey, come here. Look what I got here.', dur: 3.2 },
+      { say: 'Shelled treeline, straight north. Five, six hundred metres.', dur: 5,
+        shot: { look: 'targets', range: 420, height: 160, bearing: 0.15, fov: 9, drift: 0.008 } },
+      { say: 'Five of them. Riflemen, a machine gunner with the PK, that one has an RPG... and the officer walking about.', dur: 7,
+        shot: { look: 'targets', range: 230, height: 90, bearing: -0.35, fov: 15, drift: 0.012 } },
+      { say: 'They\'re digging in. Not going anywhere. Go get them.', dur: 4,
+        shot: { look: 'targets', range: 150, height: 70, bearing: 0.5, fov: 9, drift: 0.01 } },
+      { after: 0.5, say: 'Goggles are on the table. Bird\'s ready outside.', dur: 3.5 },
+    ],
+    outro: [
+      { after: 1.5, say: 'Good hits. That\'s the treeline clear.', dur: 4 },
+    ],
+  }];
+
   // ---- Finish ---------------------------------------------------------------------------------
 
   const level = m.finish(launch[0], launch[1], 0);
@@ -288,5 +331,6 @@ export function createCampaignLevel() {
   // The video link is measured from the antenna at the top of the mast, not from the launch spot.
   level.linkOrigin = [mastPos[0], H(...mastPos) + 8, mastPos[1]];
   level.linkRangeM = 2600;
+  level.missions = missions;
   return level;
 }

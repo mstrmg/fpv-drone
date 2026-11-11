@@ -7,6 +7,7 @@ import { Wind } from './environment.js';
 import { createEntities } from './entities.js';
 import { addPropColliders, WireField } from './propColliders.js';
 import { createWalker } from './onFoot.js';
+import { createMissions } from './missions.js';
 import { WARHEADS, ARM_DISTANCE_M, FUZE_IMPACT_SPEED, JET_REACH_M, blastAt, DamageRegistry } from './warhead.js';
 
 export const SIM_HZ = 240;
@@ -179,6 +180,8 @@ export async function createSim({ level, settings = {} }) {
     world, level, emit: (e) => emit(e), damage, explode, registerCollider: (h, id) => entityColliders.set(h, id), unregisterCollider: (h) => entityColliders.delete(h),
   });
   state.entities = entities.states;
+  const missions = walker ? createMissions({ level, entities, state, emit: (e) => emit(e) }) : null;
+  if (!missions) state.mission = null;
 
   let flightTime = 0;
   let throttleWarnUntil = -1;
@@ -384,8 +387,9 @@ export async function createSim({ level, settings = {} }) {
     if (c.pause) state.paused = !state.paused;
     if (state.paused) return;
     if (state.mode === 'foot') {
-      if ((c.interact || c.goggles) && walker.state.nearGoggles) setMode('drone');
-      if (c.resetTargets) { entities.reset(); emit({ type: 'targets_reset' }); }
+      if ((c.interact || c.goggles) && missions?.skip()) return; // skip the briefing
+      if ((c.interact || c.goggles) && walker.state.nearGoggles && !state.mission?.cutscene) setMode('drone');
+      if (c.resetTargets) { entities.reset(); emit({ type: 'targets_reset' }); missions?.reset(); }
       return;
     }
     if (walker && c.goggles) { setMode('foot'); return; }
@@ -393,7 +397,7 @@ export async function createSim({ level, settings = {} }) {
       if (state.drone.warhead.state === 'armed') detonate('manual');
       else if (!state.drone.destroyed && warhead.type !== 'none') safeWarnUntil = state.time + 2;
     }
-    if (c.resetTargets) { entities.reset(); emit({ type: 'targets_reset' }); }
+    if (c.resetTargets) { entities.reset(); emit({ type: 'targets_reset' }); missions?.reset(); }
     if (c.toggleMode) fm.mode = fm.mode === 'ACRO' ? 'ANGLE' : 'ACRO';
     if (c.reset) { respawn(); emit({ type: 'reset' }); }
     if (c.arm) {
@@ -415,7 +419,9 @@ export async function createSim({ level, settings = {} }) {
     // On foot the drone sits where it is with the sticks centred.
     const controls = state.mode === 'foot' ? NEUTRAL : input;
     if (walker) {
-      if (state.mode === 'foot') walker.update(dt, input, (col) => col.handle === droneCollider.handle);
+      missions?.update(dt);
+      // While the spotter feed is up you're watching the tablet, not walking.
+      if (state.mode === 'foot') walker.update(dt, state.mission?.cutscene ? NEUTRAL : input, (col) => col.handle === droneCollider.handle);
       state.prompt = state.mode === 'foot' && walker.state.nearGoggles ? 'goggles' : state.mode === 'drone' ? 'ungoggle' : null;
     }
 

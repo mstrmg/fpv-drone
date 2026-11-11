@@ -247,6 +247,8 @@ export function createEntities(ctx) {
     const id = dynamic ? `c${nextCrewId++}` : `e${nextId++}`;
     const e = {
       id, kind: def.kind, def: type, dynamic, fromVehicle: extra.fromVehicle,
+      tag: def.mission ?? null,   // mission id this unit is a target of
+      hold: !!def.hold,           // holds its ground: takes cover and moves about, never runs off
       spawn: { x: def.position[0], z: def.position[1], yaw: def.yaw ?? 0 },
       patrol: def.patrol ?? null, idleTime: def.idleTime ?? (type.vehicle ? 2 : 4),
       x: 0, z: 0, y: 0, yaw: 0, speed: 0, pitch: 0, roll: 0, mult: 1,
@@ -550,6 +552,21 @@ export function createEntities(ctx) {
       _qi.set(e.q[0], e.q[1], e.q[2], e.q[3]).invert();
       const l = _loc.set(drone.position[0] - e.x, 0, drone.position[2] - e.z).applyQuaternion(_qi);
       e.turretYaw = approach(e.turretYaw, Math.atan2(-l.x, -l.z), def.turret * dt);
+    }
+    if (!def.vehicle && e.hold) {
+      // Holding the position: drop flat for a few seconds, get up and shift about along their
+      // patrol line, drop again. Never runs off.
+      if (e.mode !== 'prone' && e.mode !== 'shift') { e.mode = 'prone'; e.proneUntil = time + 2 + rand() * 4; }
+      if (e.mode === 'prone') {
+        steer(e, dt, e.yaw, 0);
+        e.status = 'prone';
+        if (time > e.proneUntil) { e.mode = 'shift'; e.proneUntil = time + 4 + rand() * 6; e.waitUntil = 0; }
+      } else {
+        patrol(e, dt);
+        e.status = e.speed > 0.2 ? 'moving' : 'idle';
+        if (time > e.proneUntil) { e.mode = 'prone'; e.proneUntil = time + 3 + rand() * 6; }
+      }
+      return;
     }
     if (!def.vehicle) {
       if (e.mode === 'patrol') { // first reaction: run or hit the dirt

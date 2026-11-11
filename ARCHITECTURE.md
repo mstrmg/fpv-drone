@@ -100,6 +100,8 @@ Level = {
                             // ground collider, the visuals discard the terrain there. heightAt() is unchanged.
 }
 
+Level enemy defs may also carry `mission: <id>` (a target of that mission) and `hold: true` (alerted infantry go flat and shift
+about their patrol line but never run off).
 Level enemy defs may carry `riders: [variant, ...]`: infantry that ride on top of that vehicle (seats per
 variant in RIDER_SEATS, src/sim/entities.js) until it is knocked out or stops while they are alarmed.
 
@@ -118,6 +120,12 @@ SimState = {
   mode: 'foot' | 'drone',    // 'foot' only on levels with `start`: the camera is the soldier's eyes (no feed, no OSD)
   player: null | { position:[x,y,z] /* feet */, yaw, pitch, speed, nearGoggles },
   prompt: null | 'goggles' | 'ungoggle',   // what the interact key would do now
+  mission: null | {         // campaign (level.missions, src/sim/missions.js). No map markers: the briefing is the other soldier's spotter feed
+    id, title, objective, phase: 'intro' | 'active' | 'outro' | 'done',
+    done, total,            // targets dealt with (dead, down, or vehicle knocked out) / all
+    speaker, line: string | null, lineId,   // subtitle on screen now; lineId changes with every new line (speak it once)
+    cutscene: null | { position:[x,y,z], target:[x,y,z], fovDeg },  // on foot: show the spotter feed from here instead of the eyes
+  },
   // There is no chase / third-person view: the game is FPV only.
 
   drone: {
@@ -265,6 +273,8 @@ Every event has `{ type, time }` plus:
 | `targets_reset`    | –            | all enemies respawned at their start (ids unchanged): clear wrecks, fires and corpses |
 | `entity_alerted`   | `entityId, position` | a unit noticed the drone (visuals may play a shout / turn head); optional to use |
 | `link_lost` / `link_restored` | – | signal fell below 0.08 / recovered (not sent for the detonation cut, see `drone_lost`) |
+| `mission`          | `id, phase: 'intro' \| 'active' \| 'complete', title` | campaign mission started / objective live / all targets dealt with |
+| `mission_line`     | `speaker, text, lineId` | the other soldier says something |
 | `mode`             | `mode: 'foot' \| 'drone'` | goggles on / off (campaign). After a detonation the next drone is put by the mast and you are back on foot |
 
 `explosion` fields:

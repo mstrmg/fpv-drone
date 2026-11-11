@@ -65,6 +65,28 @@ export function createVisuals({ canvas, uiRoot, level }) {
   const dot = document.createElement('div');
   dot.style.cssText = 'position:absolute;left:50%;top:50%;width:3px;height:3px;margin:-1.5px;border-radius:50%;background:rgba(255,255,255,.55);display:none;';
   overlay.append(prompt, dot);
+  // Campaign: what the other soldier says (subtitles), the current objective, mission banners.
+  const subtitle = document.createElement('div');
+  subtitle.style.cssText = 'position:absolute;left:50%;bottom:11%;transform:translateX(-50%);max-width:80%;display:none;font:15px/1.45 system-ui,sans-serif;text-align:center;padding:6px 14px;background:rgba(0,0,0,.55);border-radius:3px;text-shadow:0 1px 2px #000;';
+  const objective = document.createElement('div');
+  objective.style.cssText = 'position:absolute;right:3%;top:5%;display:none;max-width:34%;font-size:12px;letter-spacing:.06em;line-height:1.5;text-align:right;text-shadow:0 0 3px #000;';
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:absolute;left:50%;top:30%;transform:translateX(-50%);display:none;font-size:22px;letter-spacing:.4em;text-indent:.4em;padding:10px 22px;background:rgba(0,0,0,.45);border-radius:3px;white-space:nowrap;';
+  overlay.append(subtitle, objective, banner);
+  let bannerUntil = 0, spokenId = 0;
+  const mute = params.has('mute');
+  // He speaks the lines too, with whatever voice the browser has.
+  function speak(text) {
+    const synth = window.speechSynthesis;
+    if (mute || !synth || typeof SpeechSynthesisUtterance === 'undefined') return;
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    const voices = synth.getVoices();
+    u.voice = voices.find((vo) => /en[-_]GB/i.test(vo.lang) && /male|daniel|george|arthur/i.test(vo.name))
+      ?? voices.find((vo) => /^en/i.test(vo.lang)) ?? null;
+    u.rate = 1.02; u.pitch = 0.75; u.volume = 0.9;
+    synth.speak(u);
+  }
   const paused = document.createElement('div');
   paused.style.cssText = 'position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45);font-size:28px;letter-spacing:.5em;text-indent:.5em;';
   paused.textContent = 'PAUSED';
@@ -108,6 +130,11 @@ export function createVisuals({ canvas, uiRoot, level }) {
       } else if (ev.type === 'reset') {
         glitch = 0.5; shake = 0;
         strike.active = false;
+      } else if (ev.type === 'mission') {
+        if (ev.phase === 'active' || ev.phase === 'complete') {
+          banner.textContent = ev.phase === 'active' ? `MISSION · ${ev.title.toUpperCase()}` : 'MISSION COMPLETE';
+          bannerUntil = time + 3.5;
+        }
       } else if (ev.type === 'mode') {
         // Goggles on: the feed comes up with a burst of static. Off: straight back to your own eyes.
         if (ev.mode === 'drone') glitch = 1.2;
@@ -141,6 +168,19 @@ export function createVisuals({ canvas, uiRoot, level }) {
       camera.fov = f.analog ? lensFov(f.fov ?? 78, aspect) : (f.fov ?? 60);
       return !!f.analog;
     }
+    const cut = state.mission?.cutscene;
+    if (cut && state.mode === 'foot') {
+      // The other soldier's spotter feed, full screen while he talks you through it.
+      camera.position.fromArray(cut.position);
+      camera.position.x += Math.sin(time * 0.31) * 0.8;
+      camera.position.y += Math.sin(time * 0.23 + 1) * 0.5;
+      lookTarget.fromArray(cut.target);
+      lookTarget.x += Math.sin(time * 1.1) * 0.15;
+      lookTarget.y += Math.sin(time * 0.7) * 0.1;
+      camera.lookAt(lookTarget);
+      camera.fov = cut.fovDeg;
+      return false;
+    }
     if (strike.active && strike.t > 0.45) {
       // Long lens on a hovering drone: slow drift and a little hand-off wobble.
       camera.position.copy(strike.eye);
@@ -170,7 +210,8 @@ export function createVisuals({ canvas, uiRoot, level }) {
     handleEvents(state, events);
     if (injected.length) { const extra = injected.splice(0); handleEvents(state, extra); events = events.concat(extra); }
     if (strike.active) strike.t += dt;
-    const spotting = strike.active && strike.t > 0.45;
+    const briefing = !!(state.mission?.cutscene && state.mode === 'foot');
+    const spotting = (strike.active && strike.t > 0.45) || briefing;
     glitch = Math.max(state.drone.crashed ? 0.32 : 0, glitch - dt * (glitch > 0.6 ? 2.2 : 0.9));
     shake = Math.max(0, shake - dt * 3.5);
 
@@ -198,14 +239,25 @@ export function createVisuals({ canvas, uiRoot, level }) {
     env.update(camera.position, time);
     // A long lens brings far trees close, so detail is chosen by apparent rather than true distance.
     trees.update(time, camera.position, dt, Math.min(1, Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / 0.8));
-    grass.update(spotting ? strike.pos : camera.position, time, spotting ? 0 : height);
+    grass.update(briefing ? lookTarget.fromArray(state.mission.cutscene.target) : spotting ? strike.pos : camera.position, time, spotting ? 0 : height);
     particles.update(state.paused ? 0 : dt);
     fire.update(state.paused ? 0 : dt);
     explosions.update(state.paused ? 0 : dt);
     entities.update(state, events, state.paused ? 0 : dt);
     forts.update(state.paused ? 0 : dt, camera.position);
-    prompt.style.display = foot && state.prompt === 'goggles' && !state.paused && !debug.freeCam ? 'block' : 'none';
-    dot.style.display = foot && !debug.freeCam ? 'block' : 'none';
+    prompt.style.display = foot && state.prompt === 'goggles' && !state.paused && !debug.freeCam && !briefing ? 'block' : 'none';
+    dot.style.display = foot && !debug.freeCam && !briefing ? 'block' : 'none';
+    const ms = state.mission;
+    if (ms) {
+      subtitle.style.display = ms.line ? 'block' : 'none';
+      if (ms.line) subtitle.innerHTML = `<span style="color:#d9c46a;letter-spacing:.12em;font-size:12px">${ms.speaker}</span>&nbsp; ${ms.line}`
+        + (briefing ? '<div style="opacity:.5;font-size:11px;margin-top:3px">E / ✕ skip</div>' : '');
+      if (ms.line && ms.lineId !== spokenId) { spokenId = ms.lineId; speak(ms.line); }
+      const showObj = (ms.phase === 'active') && !briefing && !state.paused;
+      objective.style.display = showObj ? 'block' : 'none';
+      if (showObj) objective.innerHTML = `<span style="opacity:.6">OBJECTIVE</span><br>${ms.objective}<br><span style="color:#d9c46a">${ms.done} / ${ms.total}</span>`;
+      banner.style.display = time < bannerUntil ? 'block' : 'none';
+    }
     osd.update(state, dt);
 
     const u = feed.uniforms;
