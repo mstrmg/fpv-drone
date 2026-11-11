@@ -304,5 +304,29 @@ async function boom(warhead, target, offset) {
   check('fuel tanker explodes big', fuel.status === 'destroyed' && boom2 && boom2.chargeKg >= 1, boom2 ? `${boom2.chargeKg} kg, radius ${boom2.radius}` : 'no explosion');
 }
 
+// 19. Props: shared layout, solid poles, crashable wires
+{
+  const pr = level.props;
+  check('props in level data', pr.poles.length > 50 && pr.wires.length > 100 && pr.fences.length > 300, `${pr.poles.length} poles, ${pr.wires.length} wires, ${pr.fences.length} fence panels, ${pr.bales.length} bales, ${pr.sandbags.length} sandbags, ${pr.craters.length} craters`);
+  const fly = async (pos, vel, secs = 0.4) => {
+    const { sim, c } = await fresh({ warhead: 'none', wind: false });
+    sim._body.setTranslation({ x: pos[0], y: pos[1], z: pos[2] }, true);
+    sim._body.setLinvel({ x: vel[0], y: vel[1], z: vel[2] }, true);
+    c.throttle = globalThis.hoverThrottle; const ev = [];
+    run(sim, c, secs, () => collect(sim, ev));
+    return ev.find((e) => e.type === 'crash');
+  };
+  const pole = pr.poles.find((q) => !q.snapped);
+  const hitPole = await fly([pole.x - 3, pole.y + 3.3, pole.z], [12, 0, 0]);
+  check('flying into a pole crashes', hitPole && !hitPole.cause, hitPole ? `impact ${hitPole.impactSpeed.toFixed(1)} m/s` : 'flew through');
+  const w = pr.wires[10];
+  const mid = [(w.a[0] + w.b[0]) / 2, (w.a[1] + w.b[1]) / 2 - w.sag, (w.a[2] + w.b[2]) / 2];
+  const dl = Math.hypot(w.b[0] - w.a[0], w.b[2] - w.a[2]), n = [-(w.b[2] - w.a[2]) / dl, (w.b[0] - w.a[0]) / dl];
+  const hitWire = await fly([mid[0] - n[0] * 1.5, mid[1], mid[2] - n[1] * 1.5], [n[0] * 8, 0, n[1] * 8]);
+  check('flying into a wire crashes it', hitWire?.cause === 'wire', hitWire ? `cause ${hitWire.cause ?? 'none'}` : 'flew through');
+  const under = await fly([mid[0] - n[0] * 1.5, mid[1] - 3, mid[2] - n[1] * 1.5], [n[0] * 8, 0, n[1] * 8]);
+  check('flying under the wires is fine', !under, under ? `crashed (${under.cause ?? 'impact'})` : 'clear');
+}
+
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed');
 process.exit(failures ? 1 : 0);

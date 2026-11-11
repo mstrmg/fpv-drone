@@ -5,6 +5,7 @@ import { Quaternion, Vector3 } from 'three';
 import { FlightModel } from './flightModel.js';
 import { Wind } from './environment.js';
 import { createEntities } from './entities.js';
+import { addPropColliders, WireField } from './propColliders.js';
 import { WARHEADS, ARM_DISTANCE_M, FUZE_IMPACT_SPEED, JET_REACH_M, blastAt, DamageRegistry } from './warhead.js';
 
 export const SIM_HZ = 240;
@@ -71,6 +72,7 @@ function buildStaticWorld(world, level) {
       tag(world.createCollider(RAPIER.ColliderDesc.ball(r * 0.8).setTranslation(0, o.height - r * 1.8, 0), body));
     }
   }
+  addPropColliders(world, ground, level, surfaces);
   return surfaces;
 }
 
@@ -90,6 +92,7 @@ export async function createSim({ level, settings = {} }) {
   const fm = new FlightModel();
   const warhead = WARHEADS[opts.warhead] ?? WARHEADS.none;
   fm.setPayload(warhead.massKg, warhead.lengthM);
+  const wires = new WireField(level);
   const damage = new DamageRegistry();
   const entityColliders = new Map(); // collider handle → entity id
   const wind = new Wind({ seed: level.seed * 13 + 1, meanSpeed: opts.wind ? 3 : 0, gustStrength: opts.wind ? 1.8 : 0 });
@@ -181,11 +184,11 @@ export async function createSim({ level, settings = {} }) {
     emit({ type: on ? 'armed' : 'disarmed' });
   }
 
-  function crash(position, impactSpeed) {
+  function crash(position, impactSpeed, cause) {
     if (state.drone.crashed) return;
     state.drone.crashed = true;
     setArmed(false);
-    emit({ type: 'crash', position, impactSpeed });
+    emit({ type: 'crash', position, impactSpeed, ...(cause ? { cause } : {}) });
   }
 
   // --- Warhead -------------------------------------------------------------
@@ -383,8 +386,17 @@ export async function createSim({ level, settings = {} }) {
     accel.copy(fm.forceWorld).divideScalar(fm.totalMass);
     accel.y -= GRAVITY;
 
+    const p0x = body.translation().x, p0y = body.translation().y, p0z = body.translation().z;
     world.step();
     state.time += dt;
+
+    // Telegraph wires: the props tangle in them and the drone drops.
+    if (!state.drone.crashed && fm.armed && wires.hit({ x: p0x, y: p0y, z: p0z }, body.translation(), 0.2)) {
+      const l = body.linvel();
+      crash([p0x, p0y, p0z], Math.hypot(l.x, l.y, l.z), 'wire');
+      body.setLinvel({ x: l.x * 0.15, y: l.y * 0.15, z: l.z * 0.15 }, true);
+      body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    }
     if (fm.armed) flightTime += dt;
 
     // Impact detection: velocity change not explained by applied forces.

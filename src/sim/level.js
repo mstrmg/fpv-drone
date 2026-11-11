@@ -1,6 +1,8 @@
 // Static level data shared by the sim (colliders) and visuals (meshes).
 // See ARCHITECTURE.md › Level.
 
+import { propLayout } from './propLayout.js';
+
 function mulberry32(seed) {
   let a = seed >>> 0;
   return () => {
@@ -150,7 +152,7 @@ export function createTestLevel(seed = 7) {
   at('tank', 't72', -150, -70, { yaw: 0 });
   at('tank', 't90', 300, -130, { yaw: Math.PI / 2 });
 
-  return {
+  const level = {
     name: 'Test range',
     seed,
     terrain,
@@ -158,4 +160,6 @@ export function createTestLevel(seed = 7) {
     enemies,
     spawn: { position: [0, terrain.heightAt(0, 0) + 0.1, 0], yaw: 0 },
   };
+  level.props = propLayout(level); // scenery shared with the visuals: colliders here, meshes there
+  return level;
 }
