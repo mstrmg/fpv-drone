@@ -3,7 +3,7 @@
 
 import { propLayout } from './propLayout.js';
 
-function mulberry32(seed) {
+export function mulberry32(seed) {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;
@@ -36,7 +36,9 @@ function makeNoise(seed) {
   };
 }
 
-export function createTerrain({ size = 1024, segments = 256, seed = 1 } = {}) {
+// pad: [x, z, inner, outer] flattens a launch pad (flat inside `inner`, full relief beyond `outer`).
+// relief scales the hills (1 = rolling steppe).
+export function createTerrain({ size = 1024, segments = 256, seed = 1, pad = [0, 0, 30, 90], relief = 1 } = {}) {
   const noise = makeNoise(seed);
   const n = segments + 1;
   const heights = new Float32Array(n * n);
@@ -51,9 +53,9 @@ export function createTerrain({ size = 1024, segments = 256, seed = 1 } = {}) {
       h += noise(x / 90 + 17, z / 90 - 5) * 4;
       h += noise(x / 30 - 40, z / 30 + 9) * 0.8;
       // Flatten a pad around spawn.
-      const d = Math.hypot(x, z);
-      const pad = Math.min(1, Math.max(0, (d - 30) / 60));
-      heights[iz * n + ix] = h * pad;
+      const d = Math.hypot(x - pad[0], z - pad[1]);
+      const k = Math.min(1, Math.max(0, (d - pad[2]) / (pad[3] - pad[2])));
+      heights[iz * n + ix] = h * k * relief;
     }
   }
 

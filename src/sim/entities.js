@@ -232,7 +232,10 @@ export function createEntities(ctx) {
       wp: 0, waitUntil: 0, alerted: false, noticeT: 0, reactAfter: 0.6 + rand() * 1.0, calmT: 0,
       mode: 'patrol', proneUntil: 0, fleeHeading: 0, turretYaw: 0, s: null, body: null, collider: null, v: null, w: null,
     };
-    e.body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
+    // Start the body at its spawn point: a body created at the origin would sweep through anything
+    // there (like a drone on its launch pad) on its first kinematic move.
+    e.body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased()
+      .setTranslation(e.spawn.x, level.terrain.heightAt(e.spawn.x, e.spawn.z), e.spawn.z));
     const [w, h, d] = type.size;
     e.collider = world.createCollider(RAPIER.ColliderDesc.cuboid(w / 2, h / 2, d / 2).setTranslation(0, h / 2, 0), e.body);
     ctx.registerCollider(e.collider.handle, id);
