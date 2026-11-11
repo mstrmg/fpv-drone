@@ -7,9 +7,11 @@
 //   intro: [{ say, after?, dur?, shot? }],     // lines in order; `after` s of silence first; `dur` s on screen
 //   outro: [{ say, after?, dur? }],           // all targets dealt with
 //   outroPartial?, outroFailed?,               // some / all of them got away (enemy defs with `route: true`)
+//   retry?: [...],                             // after a failure: the targets are put back and this plays instead of the intro
 // }]
 // Targets with `waitFor: <id>` sit still until that mission starts. A target on a `route` that reaches
 // its last point has escaped: the mission ends once every target is dealt with or gone (no timer shown).
+// If any got away the mission has failed: the outro plays, then the mission restarts.
 // A shot is the spotter camera while that line plays: { look: 'targets' | [x,y,z], range, height, bearing, fov }
 // (camera `range` m from the look point, `height` m above it, from `bearing` rad: 0 = from the south).
 // Targets are the level enemies whose def has `mission: <id>`. A target counts as dealt with once it
@@ -34,8 +36,9 @@ export function createMissions({ level, entities, state, emit }) {
   const centre = [0, 0, 0];
   const camPos = [0, 0, 0], camTarget = [0, 0, 0];
 
-  function start(i) {
-    index = i;
+  let failed = false;
+  function start(i, retry = false) {
+    index = i; failed = false;
     const def = list[i];
     if (!def) { m.phase = 'done'; m.line = null; m.cutscene = null; return; }
     m.id = def.id; m.title = def.title; m.objective = def.objective;
@@ -43,8 +46,8 @@ export function createMissions({ level, entities, state, emit }) {
     m.total = targets.length; m.done = 0; m.escaped = 0;
     for (const e of targets) if (e.waitFor === def.id) e.go = true;
     m.phase = 'intro';
-    run(def.intro ?? []);
-    emit({ type: 'mission', id: def.id, phase: 'intro', title: def.title });
+    run((retry ? def.retry : null) ?? def.intro ?? []);
+    emit({ type: 'mission', id: def.id, phase: 'intro', title: def.title, retry });
   }
 
   function run(lines) { script = lines; step = 0; clock = 0; waiting = lines[0]?.after ?? 0; lineEnds = -1; m.line = null; m.cutscene = null; }
@@ -119,7 +122,8 @@ export function createMissions({ level, entities, state, emit }) {
       if (m.done + m.escaped >= m.total) {
         m.phase = 'outro';
         const def = list[index];
-        emit({ type: 'mission', id: m.id, phase: 'complete', title: m.title, done: m.done, escaped: m.escaped });
+        failed = m.escaped > 0;
+        emit({ type: 'mission', id: m.id, phase: failed ? 'failed' : 'complete', title: m.title, done: m.done, escaped: m.escaped });
         run((m.escaped === 0 ? def.outro : m.done === 0 ? def.outroFailed ?? def.outroPartial : def.outroPartial) ?? def.outro ?? []);
       }
     }
@@ -142,6 +146,7 @@ export function createMissions({ level, entities, state, emit }) {
   function finishScript() {
     m.line = null; m.cutscene = null;
     if (m.phase === 'intro') { m.phase = 'active'; emit({ type: 'mission', id: m.id, phase: 'active', title: m.title }); }
+    else if (m.phase === 'outro' && failed) { entities.resetUnits(targets); start(index, true); }
     else if (m.phase === 'outro') start(index + 1);
   }
 

@@ -788,6 +788,14 @@ export function createEntities(ctx) {
     }
   }
 
+  // Put some units back as they started (a mission restart): their bailed-out crews go, their
+  // riders get back on.
+  function resetUnits(units) {
+    const ids = new Set(units.map((e) => e.id));
+    for (const e of [...list]) if (e.dynamic && ids.has(e.fromVehicle)) remove(e);
+    for (const e of list) if (ids.has(e.id) || (e.rideSpawn && ids.has(e.rideSpawn.veh.id))) place(e);
+  }
+
   function reset() {
     time = 0;
     nextCrewId = 0;
@@ -798,7 +806,7 @@ export function createEntities(ctx) {
   for (const def of level.enemies ?? []) spawn(def);
 
   return {
-    list, states, update, reset,
+    list, states, update, reset, resetUnits,
     get alive() { return list.filter((e) => !e.destroyed).length; },
     byId: (id) => list.find((e) => e.id === id),
   };

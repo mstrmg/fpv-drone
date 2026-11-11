@@ -344,10 +344,15 @@ export function createCampaignLevel() {
       { after: 1.5, say: 'All three. Nice flying.', dur: 3.5 },
     ],
     outroPartial: [
-      { after: 1.5, say: 'Some got through. Still, good hits.', dur: 4 },
+      { after: 1.5, say: 'Some got through. Damn.', dur: 3 },
     ],
     outroFailed: [
-      { after: 1.5, say: 'They\'re gone. Too fast for us this time.', dur: 4 },
+      { after: 1.5, say: 'They\'re gone. Too fast for us.', dur: 3.5 },
+    ],
+    retry: [
+      { after: 5, say: 'Hold on... more of them. Same road, same way.', dur: 4,
+        shot: { look: 'targets', range: 400, height: 160, bearing: 0.9, fov: 11, drift: 0.004 } },
+      { say: 'Don\'t let these ones go.', dur: 2.5 },
     ],
   }];
 

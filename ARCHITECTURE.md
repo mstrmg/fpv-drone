@@ -109,7 +109,8 @@ Hitboxes: vehicles are compound boxes per variant (HIT_SHAPES: hull, turret, gun
 Level enemy defs may carry `speed` (m/s along the patrol), `route: true` (one way: past the last point the unit has
 escaped, status `'escaped'`, and the visuals hide it) and `waitFor: <mission id>` (parked until that mission starts).
 Missions end when every target is dealt with or escaped; `outroPartial` / `outroFailed` play when some / all got away,
-and the `mission` complete event carries `done, escaped`.
+and the `mission` event (phase `'complete'`, or `'failed'` when any got away) carries `done, escaped`. A failed mission
+restarts: its targets are put back (`entities.resetUnits`) and its `retry` lines play instead of the intro.
 Level enemy defs may carry `riders: [variant, ...]`: infantry that ride on top of that vehicle (seats per
 variant in RIDER_SEATS, src/sim/entities.js) until it is knocked out or stops while they are alarmed.
 

@@ -136,9 +136,9 @@ export function createVisuals({ canvas, uiRoot, level }) {
         glitch = 0.5; shake = 0;
         strike.active = false;
       } else if (ev.type === 'mission') {
-        if (ev.phase === 'active' || ev.phase === 'complete') {
+        if (ev.phase === 'active' || ev.phase === 'complete' || ev.phase === 'failed') {
           banner.textContent = ev.phase === 'active' ? `MISSION · ${ev.title.toUpperCase()}`
-            : !ev.escaped ? 'MISSION COMPLETE' : ev.done ? `MISSION OVER · ${ev.escaped} GOT AWAY` : 'MISSION FAILED · THEY GOT AWAY';
+            : ev.phase === 'complete' ? 'MISSION COMPLETE' : ev.done ? `MISSION FAILED · ${ev.escaped} GOT AWAY` : 'MISSION FAILED · THEY GOT AWAY';
           bannerUntil = time + 3.5;
         }
       } else if (ev.type === 'mode') {
