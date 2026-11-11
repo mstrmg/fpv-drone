@@ -130,7 +130,9 @@ SimState = {
   entities: [                 // enemy troops and vehicles, including wrecks. Stable order; ids never reused.
     {
       id: string,               // 'e12'
-      kind: 'infantry' | 'truck' | 'apc' | 'tank',
+      kind: 'infantry' | 'light' | 'truck' | 'apc' | 'tank',
+      variant: string,          // look and stats, per kind (see the table below)
+      locomotion: 'foot' | 'wheels' | 'tracks',   // for animation: legs / spinning wheels / rolling tracks
       position:[x,y,z],         // base centre on the ground (for infantry: between the feet)
       quaternion:[x,y,z,w],     // hull orientation; forward is −Z
       velocity:[x,y,z],
@@ -149,6 +151,20 @@ SimState = {
   ],
 }
 ```
+
+### Entity variants
+
+`variant` picks the model and the stats. Sizes (`size`) already differ per variant, so scale models from it.
+
+| kind | variants | notes |
+|------|----------|-------|
+| `infantry` | `rifleman`, `mg`, `rpg`, `officer` | `mg` carries a belt-fed machine gun, `rpg` a rocket launcher, `officer` has a pistol / binoculars and his shout alerts the squad from further away |
+| `light` | `uaz`, `pickup`, `technical` | UAZ-469-style jeep, pickup truck, pickup with a mounted heavy MG (`technical` tracks the drone with its gun: `turretYaw`) |
+| `truck` | `ural`, `kamaz`, `fuel` | Ural-4320 6x6, KamAZ-5350, fuel tanker (explodes big and fast) |
+| `apc` | `btr`, `bmp`, `mtlb` | BTR-80-style 8x8 (`wheels`, thin armour), BMP-2-style tracked IFV, MT-LB-style light carrier (no turret) |
+| `tank` | `t72`, `t80`, `t90` | T-72 (autoloader, turret often blows off), T-80 (gas turbine, quicker), T-90 (composite + reactive armour, wider hull) |
+
+The first variant of each kind is its default.
 
 ## SimEvent (one-shot)
 
@@ -184,6 +200,7 @@ Every event has `{ type, time }` plus:
   fragmentRadius: number,  // how far fragments fly, m (0 for none)
   shaped: boolean,         // HEAT shaped charge: jet goes along `direction`
   direction: [x,y,z],      // drone's travel direction at detonation (unit)
+  turretToss?: boolean,    // cook-off of an autoloader tank (t72 / t80): the turret may fly off the hull
 }
 ```
 

@@ -131,7 +131,7 @@ export async function createSim({ level, settings = {} }) {
     const w = { chargeKg: x.chargeKg, radius: x.radius, fragmentRadius: x.fragmentRadius, fragmentLethality: x.fragmentLethality ?? 0.5, shaped: false, penetrationMm: 0 };
     emit({
       type: 'explosion', position: x.position, normal: [0, 1, 0], surface: 'entity', objectId: x.objectId, kind: x.kind,
-      chargeKg: w.chargeKg, radius: w.radius, fragmentRadius: w.fragmentRadius, shaped: false, direction: [0, 1, 0], cause: 'cookoff',
+      chargeKg: w.chargeKg, radius: w.radius, fragmentRadius: w.fragmentRadius, shaped: false, direction: [0, 1, 0], cause: 'cookoff', turretToss: !!x.turretToss,
     });
     applyBlast(x.position, [0, 1, 0], w, x.ignoreHandle);
   }

@@ -9,40 +9,100 @@ import { JET_REACH_M } from './warhead.js';
 
 // armour is mm of rolled steel equivalent per zone, used against shaped-charge jets.
 // blast / frag are how much of the (0..1) blast / fragment intensity turns into health loss.
+// `era` (reactive armour) cuts the jet's penetration on the front and sides.
+// Each kind has base stats; VARIANTS override them (the first variant of a kind is its default).
+const SPOT = (name, position, radius, mult) => ({ name, position, radius, mult });
+
 export const ENTITY_TYPES = {
   infantry: {
     size: [0.5, 1.8, 0.4], blast: 1.0, frag: 1.25, jetBase: 1, armour: { front: 1, side: 1, rear: 1, top: 1 },
-    walk: 1.4, run: 5.2, turnRate: 6, accel: 6, hearing: 30, weakSpots: [], cookoff: null, vehicle: false,
+    walk: 1.4, run: 5.2, turnRate: 6, accel: 6, hearing: 30, weakSpots: [], cookoff: null, vehicle: false, locomotion: 'foot',
+  },
+  light: { // jeeps, pickups: thin-skinned and fast
+    size: [1.8, 1.9, 4.1], blast: 1.0, frag: 0.35, jetBase: 1, armour: { front: 3, side: 2, rear: 2, top: 2 },
+    walk: 9, run: 22, turnRate: 1.8, accel: 6, hearing: 30, vehicle: true, locomotion: 'wheels',
+    weakSpots: [SPOT('engine', [0, 0.9, -1.5], 0.8, 1.5), SPOT('fuel', [0, 0.6, 1.4], 0.6, 1.8)],
+    cookoff: { chance: 0.25, delay: [1, 2.5], kind: 'vehicle', chargeKg: 0.1, radius: 2, fragmentRadius: 6, fragmentLethality: 0.2 },
   },
   truck: {
     size: [2.5, 2.9, 7.0], blast: 0.9, frag: 0.18, jetBase: 1, armour: { front: 6, side: 3, rear: 3, top: 3 },
-    walk: 6, run: 14, turnRate: 0.9, accel: 3.5, hearing: 25, vehicle: true,
-    weakSpots: [
-      { name: 'engine', position: [0, 1.2, -2.8], radius: 1.0, mult: 1.6 },
-      { name: 'fuel', position: [1.2, 0.9, 0.5], radius: 0.8, mult: 2.0 },
-    ],
+    walk: 6, run: 14, turnRate: 0.9, accel: 3.5, hearing: 25, vehicle: true, locomotion: 'wheels',
+    weakSpots: [SPOT('engine', [0, 1.2, -2.8], 1.0, 1.6), SPOT('fuel', [1.2, 0.9, 0.5], 0.8, 2.0)],
     cookoff: { chance: 0.5, delay: [1.2, 3], kind: 'vehicle', chargeKg: 0.3, radius: 3, fragmentRadius: 10, fragmentLethality: 0.3 },
   },
   apc: {
     size: [3.0, 2.4, 7.0], blast: 0.35, frag: 0.03, jetBase: 0.85, armour: { front: 100, side: 40, rear: 25, top: 15 },
-    walk: 5, run: 10, turnRate: 0.8, accel: 3, hearing: 20, turret: 1.5, vehicle: true,
-    weakSpots: [
-      { name: 'engine', position: [0, 1.2, 2.8], radius: 1.2, mult: 1.8 },
-      { name: 'top', position: [0, 2.3, 0], radius: 1.8, mult: 1.4 },
-    ],
+    walk: 5, run: 10, turnRate: 0.8, accel: 3, hearing: 20, turret: 1.5, vehicle: true, locomotion: 'tracks',
+    weakSpots: [SPOT('engine', [0, 1.2, 2.8], 1.2, 1.8), SPOT('top', [0, 2.3, 0], 1.8, 1.4)],
     cookoff: { chance: 0.75, delay: [1.5, 4], kind: 'ammo', chargeKg: 0.8, radius: 4, fragmentRadius: 18, fragmentLethality: 0.6 },
   },
   tank: {
     size: [3.4, 2.4, 7.0], blast: 0.12, frag: 0, jetBase: 0.7, armour: { front: 700, side: 300, rear: 120, top: 60 },
-    walk: 4, run: 6, turnRate: 0.6, accel: 2, hearing: 15, turret: 1.0, vehicle: true,
-    weakSpots: [
-      { name: 'ammo', position: [0, 1.8, 0], radius: 1.0, mult: 2.5 },
-      { name: 'engine', position: [0, 1.3, 3.0], radius: 1.3, mult: 2.2 },
-      { name: 'top', position: [0, 2.4, -0.3], radius: 1.6, mult: 1.6 },
-    ],
+    walk: 4, run: 6, turnRate: 0.6, accel: 2, hearing: 15, turret: 1.0, vehicle: true, locomotion: 'tracks',
+    weakSpots: [SPOT('ammo', [0, 1.8, 0], 1.0, 2.5), SPOT('engine', [0, 1.3, 3.0], 1.3, 2.2), SPOT('top', [0, 2.4, -0.3], 1.6, 1.6)],
     cookoff: { chance: 0.9, delay: [2, 5], kind: 'ammo', chargeKg: 1.8, radius: 6, fragmentRadius: 25, fragmentLethality: 0.7 },
   },
 };
+
+export const VARIANTS = {
+  infantry: {
+    rifleman: {},
+    mg: { walk: 1.2, run: 4.5, hearing: 28 },                // machine gunner, weighed down
+    rpg: { walk: 1.3, run: 4.8 },                            // anti-tank launcher
+    officer: { hearing: 38, walk: 1.5, run: 5.4 },           // alert: his shout warns the squad from further away
+  },
+  light: {
+    uaz: {},                                                 // UAZ-469 style jeep
+    pickup: { size: [2.0, 1.9, 5.2], run: 20, frag: 0.3 },   // civilian-style pickup truck
+    technical: { size: [2.0, 2.3, 5.2], run: 19, turret: 2.0, hearing: 25 }, // pickup with a mounted heavy MG
+  },
+  truck: {
+    ural: {},                                                // Ural-4320 style 6x6 cargo truck
+    kamaz: { size: [2.5, 3.1, 7.8], run: 16, blast: 0.85 },  // KamAZ-5350 style, quicker
+    fuel: {                                                  // tanker: one hit and it goes up
+      size: [2.5, 3.0, 8.0], run: 11, walk: 5,
+      weakSpots: [SPOT('fuel', [0, 1.6, 0.8], 1.8, 2.2), SPOT('engine', [0, 1.2, -3.2], 1.0, 1.4)],
+      cookoff: { chance: 0.95, delay: [0.5, 1.5], kind: 'vehicle', chargeKg: 1.2, radius: 7, fragmentRadius: 15, fragmentLethality: 0.4 },
+    },
+  },
+  apc: {
+    btr: { // BTR-80 style 8x8: fast, wheeled, very thin armour
+      size: [2.9, 2.4, 7.6], locomotion: 'wheels', armour: { front: 15, side: 10, rear: 10, top: 7 },
+      blast: 0.5, frag: 0.08, walk: 7, run: 12, turnRate: 0.9, hearing: 22,
+      cookoff: { chance: 0.6, delay: [1.5, 4], kind: 'ammo', chargeKg: 0.6, radius: 3.5, fragmentRadius: 15, fragmentLethality: 0.5 },
+    },
+    bmp: { // BMP-2 style tracked IFV
+      size: [3.2, 2.2, 6.7], armour: { front: 60, side: 25, rear: 20, top: 15 },
+      cookoff: { chance: 0.85, delay: [1.5, 4], kind: 'ammo', chargeKg: 0.9, radius: 4, fragmentRadius: 18, fragmentLethality: 0.6 },
+    },
+    mtlb: { // MT-LB style light tracked carrier, no real turret
+      size: [2.9, 2.0, 6.5], armour: { front: 14, side: 10, rear: 10, top: 7 }, blast: 0.6, frag: 0.1, turret: 0, walk: 6, run: 11,
+      cookoff: { chance: 0.4, delay: [2, 5], kind: 'ammo', chargeKg: 0.3, radius: 3, fragmentRadius: 12, fragmentLethality: 0.4 },
+    },
+  },
+  tank: {
+    t72: { // autoloader carousel: its turret often blows off
+      size: [3.6, 2.2, 6.9], armour: { front: 600, side: 250, rear: 100, top: 50 },
+      cookoff: { chance: 0.95, delay: [2, 4.5], kind: 'ammo', chargeKg: 1.8, radius: 6, fragmentRadius: 25, fragmentLethality: 0.7, turretToss: true },
+    },
+    t80: { // gas turbine: quicker and louder
+      size: [3.6, 2.2, 7.0], run: 8, hearing: 25,
+      cookoff: { chance: 0.9, delay: [2, 5], kind: 'ammo', chargeKg: 1.8, radius: 6, fragmentRadius: 25, fragmentLethality: 0.7, turretToss: true },
+    },
+    t90: { // composite + reactive armour, safer ammo storage
+      size: [3.8, 2.2, 7.1], armour: { front: 900, side: 350, rear: 130, top: 70 }, era: 0.4, blast: 0.1, turnRate: 0.55,
+      cookoff: { chance: 0.8, delay: [2, 5], kind: 'ammo', chargeKg: 1.8, radius: 6, fragmentRadius: 25, fragmentLethality: 0.7, turretToss: false },
+    },
+  },
+};
+
+export function resolveType(kind, variant) {
+  const base = ENTITY_TYPES[kind];
+  if (!base) throw new Error(`unknown entity kind ${kind}`);
+  const variants = VARIANTS[kind] ?? {};
+  const name = variant && variants[variant] ? variant : Object.keys(variants)[0];
+  return { ...base, ...variants[name], variant: name };
+}
 
 const FIRE_SECONDS = 30;
 const PRONE_SECONDS = 8;
@@ -74,14 +134,14 @@ export function createEntities(ctx) {
 
   function makeState(e) {
     return {
-      id: e.id, kind: e.kind, position: [0, 0, 0], quaternion: [0, 0, 0, 1], velocity: [0, 0, 0],
+      id: e.id, kind: e.kind, variant: e.def.variant, locomotion: e.def.locomotion, position: [0, 0, 0], quaternion: [0, 0, 0, 1], velocity: [0, 0, 0],
       size: [...e.def.size], health: 1, status: 'idle', turretYaw: 0, onFire: false, damage: 'none',
       weakSpots: e.def.weakSpots.map((w) => ({ name: w.name, position: [...w.position], radius: w.radius })),
     };
   }
 
   function spawn(def) {
-    const type = ENTITY_TYPES[def.kind];
+    const type = resolveType(def.kind, def.variant);
     const id = `e${nextId++}`;
     const e = {
       id, kind: def.kind, def: type,
@@ -182,7 +242,9 @@ export function createEntities(ctx) {
     const fragDmg = hit.fragments * def.frag * (proneInf ? 0.4 : 1);
     let jetDmg = 0;
     if (hit.shaped && def.jetBase > 0 && boxDistance(e, hit.position) <= JET_REACH_M) {
-      jetDmg = def.jetBase * Math.min(1, hit.penetrationMm / Math.max(1, def.armour[zoneOf(e, l)]));
+      const zone = zoneOf(e, l);
+      const pen = hit.penetrationMm * (def.era && zone !== 'top' ? 1 - def.era : 1); // reactive armour disrupts the jet
+      jetDmg = def.jetBase * Math.min(1, pen / Math.max(1, def.armour[zone]));
     }
     let total = blastDmg + fragDmg + jetDmg;
     if (total <= 0.001) return 0;
@@ -207,9 +269,16 @@ export function createEntities(ctx) {
     return result;
   }
 
-  function alert(e) {
+  function alert(e, shout = true) {
     e.alerted = true; e.calmT = 0;
     ctx.emit({ type: 'entity_alerted', entityId: e.id, position: [e.x, e.y + e.def.size[1] / 2, e.z] });
+    if (!shout || e.def.vehicle) return;
+    // Infantry shout a warning to nearby troops; an officer's carries further.
+    const reach = e.def.variant === 'officer' ? 40 : 15;
+    for (const o of list) {
+      if (o === e || o.destroyed || o.alerted || o.def.vehicle) continue;
+      if (Math.hypot(o.x - e.x, o.z - e.z) < reach) alert(o, false);
+    }
   }
 
   function destroy(e, cause, weak) {
@@ -231,7 +300,7 @@ export function createEntities(ctx) {
     const c = e.def.cookoff;
     ctx.explode({
       position: [e.x, e.y + e.def.size[1] / 2, e.z], objectId: e.id, kind: c.kind, chargeKg: c.chargeKg, radius: c.radius,
-      fragmentRadius: c.fragmentRadius, fragmentLethality: c.fragmentLethality, ignoreHandle: e.body.handle,
+      fragmentRadius: c.fragmentRadius, fragmentLethality: c.fragmentLethality, ignoreHandle: e.body.handle, turretToss: !!c.turretToss,
     });
   }
 
@@ -292,7 +361,7 @@ export function createEntities(ctx) {
       return;
     }
     // Vehicles: trucks and APCs drive off when it gets close, tanks stand and turn the turret.
-    const bolt = e.kind === 'truck' || (e.kind === 'apc' && dist < 50);
+    const bolt = e.kind === 'truck' || e.kind === 'light' || (e.kind === 'apc' && dist < 50);
     if (bolt) { steer(e, dt, away, def.run); e.status = 'fleeing'; } else { steer(e, dt, e.yaw, 0); e.status = 'idle'; }
   }
 

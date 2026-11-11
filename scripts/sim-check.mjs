@@ -280,5 +280,29 @@ async function boom(warhead, target, offset) {
   check('link strong when high, rolls when low and far', high.s > 0.8 && high.r === 0 && low.r > 0.1 && low.s < high.s, `high ${high.s.toFixed(2)}/roll ${high.r.toFixed(2)}; low ${low.s.toFixed(2)}/roll ${low.r.toFixed(2)}`);
 }
 
+// 18. Variants: T-90 reactive armour beats a T-80 on a frontal hit; the fuel tanker burns hot
+{
+  const front = async (variant) => {
+    const { sim } = await fresh({ warhead: 'rpg-heat', wind: false });
+    const e = sim.state.entities.find((x) => x.variant === variant);
+    const [ex, ey, ez] = e.position;
+    const half = e.size[2] / 2 + 0.3, dir = e.quaternion; void dir;
+    // approach from the front: forward is -Z in hull space, rotated by the hull yaw
+    const q = e.quaternion, yaw = 2 * Math.atan2(q[1], q[3]);
+    sim._body.setTranslation({ x: ex - Math.sin(yaw) * (half + 0.2), y: ey + 1.2, z: ez - Math.cos(yaw) * (half + 0.2) }, true);
+    sim.state.drone.warhead.state = 'armed'; sim.detonate();
+    return e.health;
+  };
+  const h80 = await front('t80'), h90 = await front('t90');
+  check('T-90 survives a frontal hit better than a T-80', h90 > h80 + 0.1, `t80 ${h80.toFixed(2)}, t90 ${h90.toFixed(2)}`);
+  const { sim } = await fresh({ warhead: 'rpg-heat', wind: false });
+  const fuel = sim.state.entities.find((x) => x.variant === 'fuel');
+  sim._body.setTranslation({ x: fuel.position[0], y: fuel.position[1] + 3.3, z: fuel.position[2] }, true);
+  sim.state.drone.warhead.state = 'armed'; sim.detonate();
+  const ev = []; run(sim, blank(), 3, () => collect(sim, ev));
+  const boom2 = ev.find((x) => x.type === 'explosion' && x.cause === 'cookoff');
+  check('fuel tanker explodes big', fuel.status === 'destroyed' && boom2 && boom2.chargeKg >= 1, boom2 ? `${boom2.chargeKg} kg, radius ${boom2.radius}` : 'no explosion');
+}
+
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed');
 process.exit(failures ? 1 : 0);

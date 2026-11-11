@@ -125,19 +125,30 @@ export function createTestLevel(seed = 7) {
 
   // Enemies (sim-only; visuals reads them from state.entities). Positions are [x, z].
   const enemies = [];
-  const at = (kind, x, z, extra = {}) => enemies.push({ kind, position: [x, z], ...extra });
+  const at = (kind, variant, x, z, extra = {}) => enemies.push({ kind, variant, position: [x, z], ...extra });
   // Easy first targets, 80 m north of the spawn.
   const loopA = [[-10, -80], [15, -95], [-5, -110]];
-  for (let i = 0; i < 3; i++) at('infantry', -10 + i * 3, -80 - i * 2, { patrol: loopA, yaw: 2.5, idleTime: 3 });
-  // Squad on patrol west of the tall buildings.
+  ['rifleman', 'rifleman', 'rpg'].forEach((v, i) => at('infantry', v, -10 + i * 3, -80 - i * 2, { patrol: loopA, yaw: 2.5, idleTime: 3 }));
+  // Squad on patrol west of the tall buildings, led by an officer.
   const loopB = [[-80, -105], [-58, -120], [-80, -135], [-100, -120]];
-  for (let i = 0; i < 4; i++) at('infantry', -80 - i * 2, -105 - i, { patrol: loopB, idleTime: 3 });
-  // Convoy driving a loop on the road to the north.
-  at('truck', -180, -190, { patrol: [[-180, -190], [40, -190], [40, -215], [-180, -215]], yaw: -Math.PI / 2 });
-  at('apc', -170, -240, { patrol: [[-170, -240], [30, -240], [30, -262], [-170, -262]], yaw: -Math.PI / 2 });
-  // Dug-in tank with infantry around it.
-  at('tank', 120, -90, { yaw: Math.PI / 2 });
-  for (let i = 0; i < 6; i++) at('infantry', 108 + (i % 3) * 3, -86 - Math.floor(i / 3) * 4 - 6, {});
+  ['officer', 'rifleman', 'rifleman', 'mg'].forEach((v, i) => at('infantry', v, -80 - i * 2, -105 - i, { patrol: loopB, idleTime: 3 }));
+  // Convoy driving loops on the road to the north: jeep, truck, BTR.
+  at('light', 'uaz', -200, -190, { patrol: [[-200, -190], [40, -190], [40, -215], [-200, -215]], yaw: -Math.PI / 2 });
+  at('truck', 'ural', -180, -190, { patrol: [[-180, -190], [40, -190], [40, -215], [-180, -215]], yaw: -Math.PI / 2 });
+  at('apc', 'btr', -170, -240, { patrol: [[-170, -240], [30, -240], [30, -262], [-170, -262]], yaw: -Math.PI / 2 });
+  // A technical on a short beat, a parked fuel tanker, and a BMP and MT-LB further out.
+  at('light', 'technical', 60, -150, { patrol: [[60, -150], [110, -150]], yaw: -Math.PI / 2 });
+  at('truck', 'fuel', 150, -175, {});
+  at('apc', 'bmp', 90, -230, { patrol: [[90, -230], [150, -230]], yaw: -Math.PI / 2 });
+  at('apc', 'mtlb', -60, -290, { patrol: [[-60, -290], [0, -290]], yaw: -Math.PI / 2 });
+  at('light', 'pickup', -120, -260, { patrol: [[-120, -260], [-120, -300]], yaw: 0 });
+  at('truck', 'kamaz', -90, -330, {});
+  // Dug-in tanks: a T-80 with its squad, a T-72 to the west and a T-90 far east.
+  at('tank', 't80', 120, -90, { yaw: Math.PI / 2 });
+  ['rifleman', 'rifleman', 'rifleman', 'mg', 'rpg', 'rifleman'].forEach((v, i) =>
+    at('infantry', v, 108 + (i % 3) * 3, -86 - Math.floor(i / 3) * 4 - 6, {}));
+  at('tank', 't72', -150, -70, { yaw: 0 });
+  at('tank', 't90', 300, -130, { yaw: Math.PI / 2 });
 
   return {
     name: 'Test range',
