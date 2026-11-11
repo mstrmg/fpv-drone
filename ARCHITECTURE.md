@@ -124,14 +124,24 @@ SimState = {
     wind: [x,y,z],            // m/s, world-frame air velocity at the drone (sway trees, drift smoke)
   },
 
-  entities: [                 // M2: troops, vehicles, wrecks. Empty in M1.
+  entities: [                 // enemy troops and vehicles, including wrecks. Stable order; ids never reused.
     {
-      id: string,
+      id: string,               // 'e12'
       kind: 'infantry' | 'truck' | 'apc' | 'tank',
-      position:[x,y,z], quaternion:[x,y,z,w], velocity:[x,y,z],
-      health: number,           // 0..1
+      position:[x,y,z],         // base centre on the ground (for infantry: between the feet)
+      quaternion:[x,y,z,w],     // hull orientation; forward is −Z
+      velocity:[x,y,z],
+      size: [w,h,d],            // hull bounding box in metres (width x, height y, depth z), standing infantry
+      health: number,           // 0..1; 0 = destroyed
       status: 'idle' | 'moving' | 'fleeing' | 'prone' | 'destroyed',
-      turretYaw?: number,       // radians relative to hull (tank/apc)
+      // infantry: idle = standing, moving = walking, fleeing = running, prone = on the ground firing/hiding
+      // vehicles: idle / moving; fleeing = driving away fast. 'destroyed' = corpse / wreck (stays in the list).
+      turretYaw: number,        // radians relative to hull; tank and apc only (else 0)
+      onFire: boolean,          // burning wreck: visuals emits flames and smoke while true
+      damage: 'none' | 'light' | 'heavy', // visible damage state for vehicles (scorch, broken tracks); 'heavy' just before destruction
+      weakSpots: [              // hull-local; visuals may mark them in debug. Hitting one multiplies damage.
+        { name: 'engine' | 'ammo' | 'fuel' | 'rear' | 'top', position:[x,y,z], radius: number },
+      ],
     },
   ],
 }
@@ -150,8 +160,9 @@ Every event has `{ type, time }` plus:
 | `reset`            | –            | drone respawned; visuals should clear trails, debris, etc. |
 | `explosion`        | see below | something blew up |
 | `drone_lost`       | `reason: 'detonated'`, `respawnIn` (s) | the drone is gone; `link.lost` is true (video feed is static) until the `reset` that follows |
-| `hit`              | `entityId, position, damage, source: 'blast' \| 'fragments'` | a target took damage (no targets yet) |
-| `entity_destroyed` | `entityId, kind, position` | M2 |
+| `hit`              | `entityId, position, damage, source: 'blast' \| 'fragments' \| 'jet', weakSpot?: string` | a target took damage (`damage` = fraction of its full health) |
+| `entity_destroyed` | `entityId, kind, position, cause: 'blast' \| 'fragments' \| 'jet' \| 'cookoff'` | a target died; it stays in `state.entities` as a corpse / wreck |
+| `entity_alerted`   | `entityId, position` | a unit noticed the drone (visuals may play a shout / turn head); optional to use |
 | `link_lost` / `link_restored` | – | M3 |
 
 `explosion` fields:
@@ -163,7 +174,7 @@ Every event has `{ type, time }` plus:
   normal: [x,y,z],         // surface normal it went off against ([0,1,0] in the air)
   surface: 'ground' | 'building' | 'tree' | 'entity' | 'air',
   objectId: string | null, // Level object id or entity id it hit, if any
-  kind: 'warhead' | 'vehicle' | 'ammo',
+  kind: 'warhead' | 'vehicle' | 'ammo',   // vehicle = fuel fire / ammo cook-off from a destroyed vehicle (smaller, delayed)
   chargeKg: number,        // TNT equivalent: drives fireball / smoke / crater size (warhead ≈ 0.3–0.7)
   radius: number,          // lethal blast radius, m
   fragmentRadius: number,  // how far fragments fly, m (0 for none)
