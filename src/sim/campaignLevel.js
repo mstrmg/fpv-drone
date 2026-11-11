@@ -301,21 +301,21 @@ export function createCampaignLevel() {
 
   // ---- Mission 2: three bikes running the lateral road behind their line ----------------------
   // A bike and two quads, nose to tail at 50-60 km/h, west to east. Parked at the far end of the
-  // road until the mission starts; past the last point they have got away (about two minutes).
-  const RUN = [[-700, -330], [0, -312], [600, -325], [1100, -320], [1460, -312]];
-  [['moto', -950, 15.8], ['atv', -975, 15.3], ['atv', -1000, 15.3]].forEach(([variant, x, speed]) => {
+  // road until the mission starts; past the last point they have got away (about three minutes).
+  const RUN = [[-700, -330], [0, -312], [600, -325], [1100, -320], [1500, -311]];
+  [['moto', -1450, 14.2], ['atv', -1475, 14], ['atv', -1500, 14]].forEach(([variant, x, speed]) => {
     const z = -320 - 10 * (x + 1536) / 836;
     m.enemy('light', variant, x, z, { patrol: [[x, z], ...RUN], speed, route: true, waitFor: 'convoy', mission: 'convoy', yaw: -Math.PI / 2 });
   });
 
   // ---- Mission 3: a supply column down the village road to the front ---------------------------
   // BTR with infantry riding on top, two trucks, an MT-LB at the back, at a crawl on a bad road.
-  // From the far end of the map to the junction behind their line: about three and a half minutes.
-  const SUPPLY = [[520, -960], [500, -820], [470, -560], [446, -380]];
+  // From the far end of the map to the junction behind their line: about five minutes.
+  const SUPPLY = [[520, -960], [500, -820], [470, -560], [446, -380], [425, -230]];
   [['apc', 'btr', -1440, { riders: ['rifleman', 'mg', 'rifleman', 'rpg'] }], ['truck', 'kamaz', -1466, {}],
     ['truck', 'ural', -1492, {}], ['apc', 'mtlb', -1518, {}]].forEach(([kind, variant, z, extra]) => {
     const x = 500 + 20 * (z + 1536) / 576;
-    m.enemy(kind, variant, x, z, { patrol: [[x, z], ...SUPPLY], speed: 4.6, route: true, waitFor: 'supply', mission: 'supply', yaw: Math.PI, ...extra });
+    m.enemy(kind, variant, x, z, { patrol: [[x, z], ...SUPPLY], speed: 3.9, route: true, waitFor: 'supply', mission: 'supply', yaw: Math.PI, ...extra });
   });
 
   // ---- Missions ---------------------------------------------------------------------------------
@@ -375,7 +375,7 @@ export function createCampaignLevel() {
         shot: { look: 'targets', range: 300, height: 120, bearing: 2.9, fov: 13, drift: 0.005 } },
       { say: 'Bearing {brg}, {rng} metres, coming {dir} towards their line. Slow, the road\'s bad.', dur: 6,
         shot: { look: 'targets', range: 450, height: 180, bearing: 2.4, fov: 15, drift: 0.004 } },
-      { say: 'You\'ve got a few minutes. Stop all four before they get to the junction.', dur: 4.5 },
+      { say: 'You\'ve got some time. Stop all four before they get to their line.', dur: 4.5 },
     ],
     outro: [
       { after: 1.5, say: 'That column\'s done. Their line goes hungry tonight.', dur: 4 },

@@ -8,6 +8,7 @@ import { createGrass } from './grass.js';
 import { createBuildings } from './buildings.js';
 import { createProps } from './props.js';
 import { createFortifications } from './fortifications.js';
+import { createRoads } from './roads.js';
 import { createDrone } from './drone.js';
 import { createParticles } from './particles.js';
 import { createExplosions } from './explosions.js';
@@ -40,6 +41,7 @@ export function createVisuals({ canvas, uiRoot, level }) {
   const buildings = createBuildings({ scene, level });
   const props = createProps({ scene, level, terrain });
   const forts = createFortifications({ scene, level });
+  const roads = createRoads({ scene, level });
   const grass = createGrass({ scene, level, maps: terrain.maps, count: quality.grass });
   const drone = createDrone({ scene });
   const particles = createParticles({ scene, max: 1600 });
@@ -353,7 +355,7 @@ export function createVisuals({ canvas, uiRoot, level }) {
     dispose() {
       clearTimeout(helpTimer); clearTimeout(helpFade);
       overlay.remove();
-      for (const part of [env, terrain, trees, buildings, props, forts, grass, drone, particles, fire, explosions, entities, feed, osd]) part.dispose();
+      for (const part of [env, terrain, trees, buildings, props, forts, roads, grass, drone, particles, fire, explosions, entities, feed, osd]) part.dispose();
       detailTex.dispose();
       tvTarget?.dispose();
       renderer.dispose();

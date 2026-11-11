@@ -746,12 +746,15 @@ export function createEntities({ scene, level, smoke, fire }) {
     }
     // Dust kicked up behind when driving fast.
     if (Math.abs(vf) > 2.5) {
+      // A plume that grows with speed: a quad bike flat out drags a long tail of it.
+      const fast = Math.min(1, (Math.abs(vf) - 2.5) / 12);
       v.dustAcc += dt * Math.abs(vf) * 0.8;
       while (v.dustAcc > 1) {
         v.dustAcc -= 1;
         const sx = Math.random() < 0.5 ? -1 : 1;
         const p = v.root.localToWorld(tmpV.set(sx * t.size[0] * 0.42, 0.25, t.size[2] * 0.45 * Math.sign(vf)));
-        smoke.spawn({ pos: [p.x, p.y, p.z], vel: [rnd(-0.5, 0.5), rnd(0.4, 1), rnd(-0.5, 0.5)], size: 0.8, grow: 3, life: 2.5, drag: 1.2, wind: 1, color: [0.31, 0.27, 0.21], alpha: 0.22 });
+        smoke.spawn({ pos: [p.x, p.y, p.z], vel: [rnd(-0.5, 0.5), rnd(0.4, 1) + fast * 0.6, rnd(-0.5, 0.5)], size: 0.8 + fast * 0.7, grow: 3 + fast * 2,
+          life: 2.5 + fast * 2, drag: 1.2, wind: 1, color: [0.33, 0.29, 0.23], alpha: 0.22 + fast * 0.13 });
       }
     }
     // Damage smoke from the engine bay, thicker as damage grows; small flames when it is bad.
