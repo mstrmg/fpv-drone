@@ -144,7 +144,9 @@ SimState = {
     wind: [x,y,z],            // m/s, world-frame air velocity at the drone (sway trees, drift smoke)
   },
 
-  entities: [                 // enemy troops and vehicles, including wrecks. Stable order; ids never reused.
+  entities: [                 // enemy troops and vehicles. Wrecks and corpses stay in the list. Ids are never reused.
+    // The list can GROW during play: a vehicle's bailing crew appear as new infantry entities
+    // (variant 'crew', fromVehicle set). `targets_reset` removes them again.
     {
       id: string,               // 'e12'
       kind: 'infantry' | 'light' | 'truck' | 'apc' | 'tank',
@@ -154,16 +156,49 @@ SimState = {
       quaternion:[x,y,z,w],     // hull orientation; forward is −Z
       velocity:[x,y,z],
       size: [w,h,d],            // hull bounding box in metres (width x, height y, depth z), standing infantry
-      health: number,           // 0..1; 0 = destroyed
-      status: 'idle' | 'moving' | 'fleeing' | 'prone' | 'destroyed',
-      // infantry: idle = standing, moving = walking, fleeing = running, prone = on the ground firing/hiding
-      // vehicles: idle / moving; fleeing = driving away fast. 'destroyed' = corpse / wreck (stays in the list).
-      turretYaw: number,        // radians relative to hull; tank and apc only (else 0)
-      onFire: boolean,          // burning wreck: visuals emits flames and smoke while true
-      damage: 'none' | 'light' | 'heavy', // visible damage state for vehicles (scorch, broken tracks); 'heavy' just before destruction
-      weakSpots: [              // hull-local; visuals may mark them in debug. Hitting one multiplies damage.
-        { name: 'engine' | 'ammo' | 'fuel' | 'rear' | 'top', position:[x,y,z], radius: number },
-      ],
+      health: number,           // 0..1 overall combat effectiveness (components + crew / body); 0 = destroyed or dead
+      status: 'idle' | 'moving' | 'fleeing' | 'prone'          // acting normally
+            | 'wounded' | 'crawling' | 'down'                  // infantry only, see below
+            | 'disabled'                                       // vehicle: knocked out but physically intact (crew dead, immobile, no gun, abandoned...)
+            | 'destroyed',                                     // vehicle: wreck (cooked off / burned out); infantry: dead
+      turretYaw: number,        // radians relative to hull; tank / apc / technical. Frozen when the turret is jammed or the gunner is out
+      onFire: boolean,          // burning: flames and smoke while true (= fire !== 'none' for vehicles)
+      weakSpots: [{ name, position:[x,y,z], radius }],   // vehicles: the internal components, hull-local (debug marker)
+
+      // ---- vehicles only ----------------------------------------------------------------
+      kill: 'none' | 'mobility' | 'firepower' | 'mobility+firepower' | 'crew' | 'burning' | 'catastrophic',
+                                // worst outcome so far. 'crew' = everybody dead or gone but it looks fine
+      mobility: 'ok' | 'slow' | 'immobilized',      // engine / tracks / wheels / driver
+      firepower: 'ok' | 'degraded' | 'disabled',    // gun / optics / gunner
+      operational: boolean,     // can still move or fight
+      crewTotal: number, crewAlive: number,         // alive and still inside
+      crew: [{
+        role: 'driver' | 'commander' | 'gunner' | 'loader' | 'troop',
+        state: 'ok' | 'wounded' | 'dead' | 'bailed',
+        visible: boolean,       // head and shoulders out of the hatch (dead + visible = slumped over it)
+        position: [x,y,z],      // hull-local seat position
+      }],
+      hatches: { driver: boolean, commander: boolean, gunner: boolean, rear: boolean },   // open?
+      bailing: boolean,         // crew are climbing out right now (a few seconds), then `abandoned`
+      abandoned: boolean,
+      fire: 'none' | 'engine' | 'full',
+      smoke: 'none' | 'light' | 'heavy',            // from the engine deck; can happen without fire
+      components: {             // 0..1 health each; `state` is 'ok' (> 0.6), 'damaged' (0.2 to 0.6) or 'destroyed' (< 0.2)
+        engine, fuel,           // every vehicle
+        ammo?, gun?, turret?, optics?,   // armoured vehicles / technical (turret = traverse drive: jammed when destroyed; gun = barrel)
+        trackL?, trackR?,       // tracked: a destroyed track means a thrown track
+        wheels?,                // wheeled
+        // each: { hp: number, state: 'ok' | 'damaged' | 'destroyed', position: [x,y,z], radius: number }
+      },
+
+      // ---- infantry only ----------------------------------------------------------------
+      // status: wounded = limping or holding a wound, crawling = can't stand, down = alive but incapacitated
+      //         (lying, writhing, bleeding out), destroyed = dead.
+      condition: 'ok' | 'wounded' | 'crawling' | 'down' | 'dead',
+      wounds: { head: number, torso: number, armL: number, armR: number, legL: number, legR: number },  // 1 = unhurt .. 0 = destroyed
+      mobility: number,         // 0..1 (legs)
+      bleeding: boolean,
+      fromVehicle?: string,     // id of the vehicle a bailed-out crewman came from (variant 'crew')
     },
   ],
 }
@@ -175,7 +210,7 @@ SimState = {
 
 | kind | variants | notes |
 |------|----------|-------|
-| `infantry` | `rifleman`, `mg`, `rpg`, `officer` | `mg` carries a belt-fed machine gun, `rpg` a rocket launcher, `officer` has a pistol / binoculars and his shout alerts the squad from further away |
+| `infantry` | `rifleman`, `mg`, `rpg`, `officer`, `crew` | `mg` carries a belt-fed machine gun, `rpg` a rocket launcher, `officer` has a pistol / binoculars and his shout alerts the squad from further away, `crew` = a bailed-out vehicle crewman (tanker helmet and coveralls; `fromVehicle` set) |
 | `light` | `uaz`, `pickup`, `technical` | UAZ-469-style jeep, pickup truck, pickup with a mounted heavy MG (`technical` tracks the drone with its gun: `turretYaw`) |
 | `truck` | `ural`, `kamaz`, `fuel` | Ural-4320 6x6, KamAZ-5350, fuel tanker (explodes big and fast) |
 | `apc` | `btr`, `bmp`, `mtlb` | BTR-80-style 8x8 (`wheels`, thin armour), BMP-2-style tracked IFV, MT-LB-style light carrier (no turret) |
@@ -196,8 +231,14 @@ Every event has `{ type, time }` plus:
 | `reset`            | –            | drone respawned; visuals should clear trails, debris, etc. |
 | `explosion`        | see below | something blew up |
 | `drone_lost`       | `reason: 'detonated'`, `respawnIn` (s) | the drone is gone; `link.lost` is true (video feed is static) until the `reset` that follows |
-| `hit`              | `entityId, position, damage, source: 'blast' \| 'fragments' \| 'jet', weakSpot?: string` | a target took damage (`damage` = fraction of its full health) |
-| `entity_destroyed` | `entityId, kind, position, cause: 'blast' \| 'fragments' \| 'jet' \| 'cookoff'` | a target died; it stays in `state.entities` as a corpse / wreck |
+| `hit`              | `entityId, position, damage, source: 'blast' \| 'fragments' \| 'jet', localPosition, localNormal, penetrated, component?, bodyPart?` | a target was hit. `localPosition` / `localNormal` are on the hull (or body) surface in its local frame: the jet's entry point, or the nearest point to a blast: leave a hole or scorch mark there. `penetrated`: the jet got through the armour. `component`: the part it damaged (vehicles). `bodyPart`: 'head' \| 'torso' \| 'armL' \| 'armR' \| 'legL' \| 'legR' (infantry). `damage` = change in `health` |
+| `component_damaged`| `entityId, component, state: 'damaged' \| 'destroyed'` | a vehicle part got worse (thrown track, engine smoke, jammed turret, bent gun...) |
+| `crew_hit`         | `entityId, role, state: 'wounded' \| 'dead'` | a crewman was hurt or killed inside a vehicle |
+| `crew_bailout`     | `entityId, count` | the crew are climbing out (hatches open); they appear as new infantry entities |
+| `entity_disabled`  | `entityId, kind: 'mobility' \| 'firepower' \| 'mobility+firepower' \| 'crew'` | a vehicle was knocked out without being destroyed |
+| `entity_condition` | `entityId, condition: 'wounded' \| 'crawling' \| 'down' \| 'dead'` | an infantryman's condition changed |
+| `entity_spawned`   | `entityId, kind, variant, position, fromVehicle?` | a new entity appeared mid-game (bailing crew) |
+| `entity_destroyed` | `entityId, kind, position, cause: 'blast' \| 'fragments' \| 'jet' \| 'cookoff' \| 'fire' \| 'bleedout'` | a vehicle became a wreck (cook-off or burned out) or an infantryman died; it stays in `state.entities` |
 | `targets_reset`    | –            | all enemies respawned at their start (ids unchanged): clear wrecks, fires and corpses |
 | `entity_alerted`   | `entityId, position` | a unit noticed the drone (visuals may play a shout / turn head); optional to use |
 | `link_lost` / `link_restored` | – | signal fell below 0.08 / recovered (not sent for the detonation cut, see `drone_lost`) |
